@@ -1,2 +1,10 @@
 node_modules/
 *.db
+*.db-shm
+*.db-wal
+
+# Xcode
+ios/TrustMesh.xcodeproj/xcuserdata/
+ios/TrustMesh.xcodeproj/project.xcworkspace/xcuserdata/
+DerivedData/
+*.xcuserstate
