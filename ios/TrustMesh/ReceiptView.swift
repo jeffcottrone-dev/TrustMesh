@@ -7,6 +7,7 @@
 
 import SwiftUI
 import CoreImage.CIFilterBuiltins
+import MessageUI
 
 struct ReceiptView: View {
     let receipt: Receipt
@@ -17,6 +18,9 @@ struct ReceiptView: View {
     @State private var recipient = ""
     @State private var sent = false
     @State private var qrImage: UIImage?
+    @State private var showMailComposer = false
+    @State private var showMessageComposer = false
+    @State private var sendError = ""
 
     var body: some View {
         ScrollView {
@@ -82,9 +86,15 @@ struct ReceiptView: View {
                     }
 
                     if sent {
-                        Text("Receipt shared")
+                        Text("Receipt sent!")
                             .font(.caption)
                             .foregroundColor(.green)
+                    }
+
+                    if !sendError.isEmpty {
+                        Text(sendError)
+                            .font(.caption)
+                            .foregroundColor(.red)
                     }
                 }
                 .padding(.horizontal)
@@ -140,14 +150,55 @@ struct ReceiptView: View {
         .onTapGesture {
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         }
+        .sheet(isPresented: $showMailComposer) {
+            MailComposeView(
+                recipient: recipient,
+                subject: "TrustMesh Authorization Receipt",
+                body: "Here is your TrustMesh authorization receipt for: \(actionText)\n\nScan the attached QR code in the TrustMesh app to verify this receipt.\n\nReceipt data:\n\(receiptData)",
+                qrImage: qrImage
+            ) { result in
+                if result == .sent {
+                    sent = true
+                }
+            }
+        }
+        .sheet(isPresented: $showMessageComposer) {
+            MessageComposeView(
+                recipient: recipient,
+                body: "TrustMesh receipt for: \(actionText) — Scan the QR code in TrustMesh to verify.",
+                qrImage: qrImage
+            ) { result in
+                if result == .sent {
+                    sent = true
+                }
+            }
+        }
     }
 
     // MARK: - Send
 
     private func sendReceipt() {
-        UIPasteboard.general.string = receiptData
-        sent = true
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        sendError = ""
+
+        if isPhoneNumber(recipient) {
+            if MFMessageComposeViewController.canSendText() {
+                showMessageComposer = true
+            } else {
+                sendError = "Text messaging is not available on this device"
+            }
+        } else {
+            if MFMailComposeViewController.canSendMail() {
+                showMailComposer = true
+            } else {
+                sendError = "Email is not configured on this device"
+            }
+        }
+    }
+
+    private func isPhoneNumber(_ input: String) -> Bool {
+        let digits = input.filter { $0.isNumber }
+        return digits.count >= 7 && !input.contains("@")
     }
 
     // MARK: - Helpers
@@ -195,5 +246,92 @@ struct ReceiptView: View {
         let scaled = output.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
         return UIImage(cgImage: cgImage)
+    }
+}
+
+// MARK: - Mail Compose View (UIKit wrapper)
+
+struct MailComposeView: UIViewControllerRepresentable {
+    let recipient: String
+    let subject: String
+    let body: String
+    let qrImage: UIImage?
+    let onComplete: (MFMailComposeResult) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onComplete: onComplete)
+    }
+
+    func makeUIViewController(context: Context) -> MFMailComposeViewController {
+        let vc = MFMailComposeViewController()
+        vc.mailComposeDelegate = context.coordinator
+        vc.setToRecipients([recipient])
+        vc.setSubject(subject)
+        vc.setMessageBody(body, isHTML: false)
+        if let image = qrImage, let png = image.pngData() {
+            vc.addAttachmentData(png, mimeType: "image/png", fileName: "TrustMesh_Receipt.png")
+        }
+        return vc
+    }
+
+    func updateUIViewController(_ vc: MFMailComposeViewController, context: Context) {}
+
+    class Coordinator: NSObject, MFMailComposeViewControllerDelegate {
+        let onComplete: (MFMailComposeResult) -> Void
+        init(onComplete: @escaping (MFMailComposeResult) -> Void) {
+            self.onComplete = onComplete
+        }
+        func mailComposeController(_ controller: MFMailComposeViewController, didFinishWith result: MFMailComposeResult, error: Error?) {
+            onComplete(result)
+            controller.dismiss(animated: true)
+        }
+    }
+}
+
+// MARK: - Message Compose View (UIKit wrapper)
+
+struct MessageComposeView: UIViewControllerRepresentable {
+    let recipient: String
+    let body: String
+    let qrImage: UIImage?
+    let onComplete: (MessageComposeResult) -> Void
+
+    enum MessageComposeResult {
+        case sent, cancelled, failed
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onComplete: onComplete)
+    }
+
+    func makeUIViewController(context: Context) -> MFMessageComposeViewController {
+        let vc = MFMessageComposeViewController()
+        vc.messageComposeDelegate = context.coordinator
+        vc.recipients = [recipient]
+        vc.body = body
+        if let image = qrImage, let png = image.pngData() {
+            vc.addAttachmentData(png, typeIdentifier: "public.png", filename: "TrustMesh_Receipt.png")
+        }
+        return vc
+    }
+
+    func updateUIViewController(_ vc: MFMessageComposeViewController, context: Context) {}
+
+    class Coordinator: NSObject, MFMessageComposeViewControllerDelegate {
+        let onComplete: (MessageComposeResult) -> Void
+        init(onComplete: @escaping (MessageComposeResult) -> Void) {
+            self.onComplete = onComplete
+        }
+        func messageComposeViewController(_ controller: MFMessageComposeViewController, didFinishWith result: MessageComposeResult) {
+            let mapped: MessageComposeView.MessageComposeResult
+            switch result {
+            case .sent: mapped = .sent
+            case .cancelled: mapped = .cancelled
+            case .failed: mapped = .failed
+            @unknown default: mapped = .failed
+            }
+            onComplete(mapped)
+            controller.dismiss(animated: true)
+        }
     }
 }

@@ -32,6 +32,18 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sessions (
+    code            TEXT PRIMARY KEY,
+    creatorDeviceID TEXT NOT NULL,
+    joinerDeviceID  TEXT,
+    creatorReceipt  TEXT,
+    joinerReceipt   TEXT,
+    status          TEXT NOT NULL DEFAULT 'waiting',
+    createdAt       TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
 // --- Prepared statements ---
 
 const upsertKey = db.prepare(`
@@ -63,6 +75,26 @@ const checkSession = db.prepare(
 
 const insertSession = db.prepare(
   `INSERT INTO seen_sessions (sessionID, deviceID) VALUES (?, ?)`
+);
+
+const createSession = db.prepare(
+  `INSERT INTO sessions (code, creatorDeviceID) VALUES (?, ?)`
+);
+
+const lookupSession = db.prepare(
+  `SELECT * FROM sessions WHERE code = ?`
+);
+
+const joinSession = db.prepare(
+  `UPDATE sessions SET joinerDeviceID = ?, status = 'joined' WHERE code = ? AND joinerDeviceID IS NULL`
+);
+
+const submitCreatorReceipt = db.prepare(
+  `UPDATE sessions SET creatorReceipt = ?, status = CASE WHEN joinerReceipt IS NOT NULL THEN 'complete' ELSE status END WHERE code = ? AND creatorDeviceID = ?`
+);
+
+const submitJoinerReceipt = db.prepare(
+  `UPDATE sessions SET joinerReceipt = ?, status = CASE WHEN creatorReceipt IS NOT NULL THEN 'complete' ELSE status END WHERE code = ? AND joinerDeviceID = ?`
 );
 
 // --- Routes ---
@@ -148,6 +180,101 @@ app.post("/verify", (req, res) => {
   } catch (err) {
     res.json({ verified: false, error: err.message });
   }
+});
+
+// --- Shared Sessions (P2P) ---
+
+// Create a new session
+app.post("/sessions", (req, res) => {
+  const { deviceID } = req.body;
+  if (!deviceID) {
+    return res.status(400).json({ error: "deviceID is required" });
+  }
+
+  // Generate unique 6-digit code (retry on collision)
+  let code;
+  for (let i = 0; i < 10; i++) {
+    code = String(Math.floor(100000 + Math.random() * 900000));
+    const existing = lookupSession.get(code);
+    if (!existing) break;
+    if (i === 9) return res.status(500).json({ error: "could not generate unique code" });
+  }
+
+  createSession.run(code, deviceID);
+  res.status(201).json({ code, status: "waiting" });
+});
+
+// Join an existing session
+app.post("/sessions/:code/join", (req, res) => {
+  const { deviceID } = req.body;
+  const { code } = req.params;
+  if (!deviceID) {
+    return res.status(400).json({ error: "deviceID is required" });
+  }
+
+  const session = lookupSession.get(code);
+  if (!session) {
+    return res.status(404).json({ error: "session not found" });
+  }
+  if (session.creatorDeviceID === deviceID) {
+    return res.json({ status: session.status, role: "creator" });
+  }
+  if (session.joinerDeviceID && session.joinerDeviceID !== deviceID) {
+    return res.status(409).json({ error: "session already has two participants" });
+  }
+  if (!session.joinerDeviceID) {
+    joinSession.run(deviceID, code);
+  }
+  res.json({ status: "joined", role: "joiner" });
+});
+
+// Submit a receipt to a session
+app.post("/sessions/:code/receipt", (req, res) => {
+  const { deviceID, receipt } = req.body;
+  const { code } = req.params;
+  if (!deviceID || !receipt) {
+    return res.status(400).json({ error: "deviceID and receipt are required" });
+  }
+
+  const session = lookupSession.get(code);
+  if (!session) {
+    return res.status(404).json({ error: "session not found" });
+  }
+
+  const receiptJSON = JSON.stringify(receipt);
+
+  if (session.creatorDeviceID === deviceID) {
+    submitCreatorReceipt.run(receiptJSON, code, deviceID);
+  } else if (session.joinerDeviceID === deviceID) {
+    submitJoinerReceipt.run(receiptJSON, code, deviceID);
+  } else {
+    return res.status(403).json({ error: "device is not part of this session" });
+  }
+
+  // Fetch updated session
+  const updated = lookupSession.get(code);
+  res.json({
+    status: updated.status,
+    creatorReceipt: updated.creatorReceipt ? JSON.parse(updated.creatorReceipt) : null,
+    joinerReceipt: updated.joinerReceipt ? JSON.parse(updated.joinerReceipt) : null,
+  });
+});
+
+// Get session status
+app.get("/sessions/:code", (req, res) => {
+  const session = lookupSession.get(req.params.code);
+  if (!session) {
+    return res.status(404).json({ error: "session not found" });
+  }
+  res.json({
+    code: session.code,
+    status: session.status,
+    creatorDeviceID: session.creatorDeviceID,
+    joinerDeviceID: session.joinerDeviceID,
+    creatorReceipt: session.creatorReceipt ? JSON.parse(session.creatorReceipt) : null,
+    joinerReceipt: session.joinerReceipt ? JSON.parse(session.joinerReceipt) : null,
+    createdAt: session.createdAt,
+  });
 });
 
 // Health check

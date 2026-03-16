@@ -15,9 +15,14 @@ struct SharedSessionView: View {
     @State private var showReceipt = false
     @State private var isLoading = false
     @State private var errorMessage = ""
+    @State private var role: String = ""
+    @State private var partnerSubmitted = false
+    @State private var pollTimer: Timer?
+
+    private let backendURL = "https://trustmesh-production.up.railway.app"
 
     enum SessionMode {
-        case choose, create, join, ready
+        case choose, create, join, ready, submitted
     }
 
     var body: some View {
@@ -32,6 +37,8 @@ struct SharedSessionView: View {
                     joinView
                 case .ready:
                     readyView
+                case .submitted:
+                    submittedView
                 }
             }
             .navigationTitle("Shared Session")
@@ -41,6 +48,9 @@ struct SharedSessionView: View {
                     ReceiptView(receipt: receipt, actionText: actionText, referenceID: sessionCode)
                 }
             }
+        }
+        .onDisappear {
+            pollTimer?.invalidate()
         }
     }
 
@@ -65,14 +75,19 @@ struct SharedSessionView: View {
                 .padding(.horizontal)
 
             VStack(spacing: 16) {
-                Button(action: { createSession() }) {
-                    Label("Create Session", systemImage: "plus.circle")
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.purple)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
+                Button(action: { createSessionOnServer() }) {
+                    if isLoading {
+                        ProgressView().tint(.white)
+                    } else {
+                        Label("Create Session", systemImage: "plus.circle")
+                    }
                 }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(Color.purple)
+                .foregroundColor(.white)
+                .cornerRadius(10)
+                .disabled(isLoading)
 
                 Button(action: { mode = .join }) {
                     Label("Join Session", systemImage: "arrow.right.circle")
@@ -82,8 +97,16 @@ struct SharedSessionView: View {
                         .foregroundColor(.purple)
                         .cornerRadius(10)
                 }
+                .disabled(isLoading)
             }
             .padding(.horizontal)
+
+            if !errorMessage.isEmpty {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundColor(.red)
+                    .padding(.horizontal)
+            }
 
             Spacer()
         }
@@ -154,22 +177,33 @@ struct SharedSessionView: View {
                 .frame(width: 200)
                 .textFieldStyle(.roundedBorder)
 
+            if !errorMessage.isEmpty {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundColor(.red)
+                    .padding(.horizontal)
+            }
+
             HStack(spacing: 16) {
-                Button("Back") { mode = .choose; sessionCode = "" }
+                Button("Back") { mode = .choose; sessionCode = ""; errorMessage = "" }
                     .padding()
                     .frame(maxWidth: .infinity)
                     .background(Color.gray.opacity(0.2))
                     .cornerRadius(10)
 
-                Button(action: { mode = .ready }) {
-                    Text("Join")
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(sessionCode.count >= 6 ? Color.purple : Color.gray)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
+                Button(action: { joinSessionOnServer() }) {
+                    if isLoading {
+                        ProgressView().tint(.white)
+                    } else {
+                        Text("Join")
+                    }
                 }
-                .disabled(sessionCode.count < 6)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(sessionCode.count >= 6 ? Color.purple : Color.gray)
+                .foregroundColor(.white)
+                .cornerRadius(10)
+                .disabled(sessionCode.count < 6 || isLoading)
             }
             .padding(.horizontal)
 
@@ -188,6 +222,9 @@ struct SharedSessionView: View {
                 Text("Session: \(sessionCode)")
                     .font(.system(.headline, design: .monospaced))
                     .foregroundColor(.purple)
+                Text("Role: \(role == "creator" ? "Creator" : "Joiner")")
+                    .font(.caption)
+                    .foregroundColor(.gray)
             }
             .padding(.top)
 
@@ -222,10 +259,7 @@ struct SharedSessionView: View {
             Spacer()
 
             Button("Start Over") {
-                mode = .choose
-                sessionCode = ""
-                actionText = ""
-                errorMessage = ""
+                resetState()
             }
             .foregroundColor(.gray)
             .padding(.bottom)
@@ -235,12 +269,126 @@ struct SharedSessionView: View {
         }
     }
 
-    // MARK: - Helpers
+    // MARK: - Submitted — waiting for partner
 
-    private func createSession() {
-        let code = String(format: "%06d", Int.random(in: 100000...999999))
-        sessionCode = code
-        mode = .create
+    private var submittedView: some View {
+        VStack(spacing: 24) {
+            Spacer()
+
+            Image(systemName: partnerSubmitted ? "checkmark.circle.fill" : "hourglass")
+                .font(.system(size: 60))
+                .foregroundColor(partnerSubmitted ? .green : .purple)
+
+            Text(partnerSubmitted ? "Session Complete" : "Waiting for Partner")
+                .font(.title2)
+                .fontWeight(.bold)
+
+            Text("Session: \(sessionCode)")
+                .font(.system(.headline, design: .monospaced))
+                .foregroundColor(.purple)
+
+            if partnerSubmitted {
+                Text("Both parties have submitted their authorization receipts. The session is complete.")
+                    .font(.subheadline)
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+
+                Button(action: {
+                    showReceipt = true
+                }) {
+                    Label("View Your Receipt", systemImage: "doc.text")
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.purple)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                }
+                .padding(.horizontal)
+            } else {
+                Text("Your receipt has been submitted. Waiting for the other party to authorize their side...")
+                    .font(.subheadline)
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+
+                ProgressView()
+                    .tint(.purple)
+            }
+
+            Spacer()
+
+            Button("Start Over") {
+                resetState()
+            }
+            .foregroundColor(.gray)
+            .padding(.bottom)
+        }
+    }
+
+    // MARK: - Server Actions
+
+    private func createSessionOnServer() {
+        isLoading = true
+        errorMessage = ""
+
+        Task {
+            do {
+                let deviceID = KeyManager.shared.deviceID()
+                let url = URL(string: "\(backendURL)/sessions")!
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.httpBody = try JSONSerialization.data(withJSONObject: ["deviceID": deviceID])
+
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse, http.statusCode == 201 else {
+                    let body = String(data: data, encoding: .utf8) ?? "unknown error"
+                    throw NSError(domain: "", code: 0, userInfo: [NSLocalizedDescriptionKey: body])
+                }
+
+                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                sessionCode = json?["code"] as? String ?? ""
+                role = "creator"
+                mode = .create
+            } catch {
+                errorMessage = "Failed to create session: \(error.localizedDescription)"
+            }
+            isLoading = false
+        }
+    }
+
+    private func joinSessionOnServer() {
+        isLoading = true
+        errorMessage = ""
+
+        Task {
+            do {
+                let deviceID = KeyManager.shared.deviceID()
+                let url = URL(string: "\(backendURL)/sessions/\(sessionCode)/join")!
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.httpBody = try JSONSerialization.data(withJSONObject: ["deviceID": deviceID])
+
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                    let body = String(data: data, encoding: .utf8) ?? "unknown error"
+                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let error = json["error"] as? String {
+                        throw NSError(domain: "", code: 0, userInfo: [NSLocalizedDescriptionKey: error])
+                    }
+                    throw NSError(domain: "", code: 0, userInfo: [NSLocalizedDescriptionKey: body])
+                }
+
+                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                role = json?["role"] as? String ?? "joiner"
+                mode = .ready
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isLoading = false
+        }
     }
 
     private func authorize() {
@@ -252,11 +400,88 @@ struct SharedSessionView: View {
                 let fullAction = "[\(sessionCode)] \(actionText)"
                 let receipt = try await ReceiptGenerator.shared.generateReceipt(actionText: fullAction)
                 currentReceipt = receipt
-                showReceipt = true
+
+                // Submit receipt to backend
+                try await submitReceiptToServer(receipt: receipt)
+
+                mode = .submitted
+                startPollingForPartner()
             } catch {
                 errorMessage = error.localizedDescription
             }
             isLoading = false
         }
+    }
+
+    private func submitReceiptToServer(receipt: Receipt) async throws {
+        let deviceID = KeyManager.shared.deviceID()
+        let url = URL(string: "\(backendURL)/sessions/\(sessionCode)/receipt")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let receiptData = try encoder.encode(receipt)
+        let receiptJSON = try JSONSerialization.jsonObject(with: receiptData)
+
+        let body: [String: Any] = [
+            "deviceID": deviceID,
+            "receipt": receiptJSON
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? "unknown error"
+            throw NSError(domain: "", code: 0, userInfo: [NSLocalizedDescriptionKey: body])
+        }
+
+        // Check if partner already submitted
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        if json?["status"] as? String == "complete" {
+            await MainActor.run {
+                partnerSubmitted = true
+            }
+        }
+    }
+
+    private func startPollingForPartner() {
+        pollTimer?.invalidate()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
+            Task {
+                await checkSessionStatus()
+            }
+        }
+    }
+
+    private func checkSessionStatus() async {
+        guard let url = URL(string: "\(backendURL)/sessions/\(sessionCode)") else { return }
+
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            if json?["status"] as? String == "complete" {
+                await MainActor.run {
+                    partnerSubmitted = true
+                    pollTimer?.invalidate()
+                }
+            }
+        } catch {
+            print("Session poll error: \(error)")
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func resetState() {
+        pollTimer?.invalidate()
+        mode = .choose
+        sessionCode = ""
+        actionText = ""
+        errorMessage = ""
+        role = ""
+        partnerSubmitted = false
+        currentReceipt = nil
     }
 }
