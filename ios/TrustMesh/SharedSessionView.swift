@@ -401,6 +401,13 @@ struct SharedSessionView: View {
                 let receipt = try await ReceiptGenerator.shared.generateReceipt(actionText: fullAction)
                 currentReceipt = receipt
 
+                // Save to local history immediately
+                ReceiptStore.shared.save(
+                    receipt: receipt,
+                    actionText: fullAction,
+                    referenceID: sessionCode
+                )
+
                 // Submit receipt to backend
                 try await submitReceiptToServer(receipt: receipt)
 
