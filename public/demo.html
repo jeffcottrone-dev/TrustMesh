@@ -234,6 +234,17 @@ async function checkSession() {
 
     if (data.joinerReceipt) {
       clearInterval(pollInterval);
+
+      // Submit creator's acknowledgment so phone sees "complete"
+      fetch(`${API}/sessions/${currentSessionCode}/receipt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          deviceID: 'web-demo-chase',
+          receipt: { type: 'web-ack', action: 'Wire Transfer $50,000', authorized: true, timestamp: new Date().toISOString() }
+        })
+      }).catch(() => {});
+
       // Show success in modal
       document.getElementById('tmWaiting').classList.add('hidden');
       document.getElementById('tmSuccess').classList.remove('hidden');
