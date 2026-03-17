@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chase Bank — Online Banking</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; color: #1a1a2e; min-height: 100vh; }
+
+  /* Chase header */
+  .header { background: #117ACA; padding: 16px 32px; display: flex; align-items: center; gap: 12px; }
+  .header img { height: 32px; }
+  .header h1 { color: white; font-size: 20px; font-weight: 600; }
+  .header .chase-logo { font-size: 24px; font-weight: 800; color: white; letter-spacing: -0.5px; }
+
+  /* Main container */
+  .container { max-width: 480px; margin: 40px auto; padding: 0 20px; }
+
+  /* Card */
+  .card { background: white; border-radius: 12px; padding: 32px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+  .card h2 { font-size: 22px; margin-bottom: 6px; }
+  .card .subtitle { color: #666; font-size: 14px; margin-bottom: 24px; }
+
+  /* Form */
+  label { display: block; font-size: 13px; font-weight: 600; color: #444; margin-bottom: 6px; margin-top: 16px; }
+  input, select { width: 100%; padding: 12px 14px; border: 1px solid #d0d5dd; border-radius: 8px; font-size: 15px; outline: none; transition: border 0.2s; }
+  input:focus, select:focus { border-color: #117ACA; }
+
+  .btn { width: 100%; padding: 14px; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; margin-top: 24px; transition: all 0.2s; }
+  .btn-primary { background: #117ACA; color: white; }
+  .btn-primary:hover { background: #0e68ad; }
+  .btn-primary:disabled { background: #a0c4e8; cursor: not-allowed; }
+  .btn-danger { background: #dc3545; color: white; }
+
+  /* TrustMesh overlay */
+  .tm-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; justify-content: center; align-items: center; }
+  .tm-overlay.active { display: flex; }
+  .tm-modal { background: #1B2A4A; border-radius: 16px; padding: 40px 32px; max-width: 420px; width: 90%; text-align: center; color: white; box-shadow: 0 20px 60px rgba(0,0,0,0.4); }
+  .tm-modal .shield { font-size: 48px; margin-bottom: 16px; }
+  .tm-modal h3 { font-size: 20px; margin-bottom: 8px; }
+  .tm-modal .tm-sub { color: #BFC7D1; font-size: 14px; margin-bottom: 24px; }
+  .tm-modal .session-code { font-size: 42px; font-weight: 800; letter-spacing: 8px; color: #4A7FC1; font-family: 'SF Mono', 'Fira Code', monospace; margin: 16px 0; }
+  .tm-modal .instructions { color: #BFC7D1; font-size: 13px; line-height: 1.6; margin-top: 16px; }
+  .tm-modal .instructions strong { color: white; }
+
+  /* Status indicators */
+  .status-waiting { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 20px; }
+  .spinner { width: 20px; height: 20px; border: 3px solid #4A7FC1; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .status-text { color: #4A7FC1; font-size: 14px; font-weight: 500; }
+
+  /* Success state */
+  .success-banner { display: none; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 8px; padding: 16px; margin-top: 20px; text-align: center; }
+  .success-banner.active { display: block; }
+  .success-banner .check { font-size: 32px; color: #28a745; }
+  .success-banner p { color: #155724; font-weight: 600; margin-top: 8px; }
+  .success-banner .detail { color: #155724; font-size: 13px; font-weight: 400; opacity: 0.8; }
+
+  /* Authorized full-screen */
+  .authorized-screen { display: none; }
+  .authorized-screen.active { display: block; }
+  .authorized-screen .big-check { font-size: 80px; color: #28a745; text-align: center; margin: 40px 0 16px; }
+  .authorized-screen h2 { color: #28a745; text-align: center; }
+  .authorized-screen .details { background: #f8f9fa; border-radius: 8px; padding: 20px; margin-top: 24px; }
+  .authorized-screen .details .row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+  .authorized-screen .details .row:last-child { border: none; }
+  .authorized-screen .details .label { color: #666; font-size: 13px; }
+  .authorized-screen .details .value { font-weight: 600; font-size: 13px; }
+  .tm-badge { display: inline-flex; align-items: center; gap: 6px; background: #1B2A4A; color: #4A7FC1; padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; margin-top: 16px; }
+
+  .hidden { display: none; }
+  .screen { transition: opacity 0.3s; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <span class="chase-logo">CHASE</span>
+  <span style="color:rgba(255,255,255,0.6); font-size:14px;">| Online Banking</span>
+</div>
+
+<!-- SCREEN 1: Login -->
+<div id="loginScreen" class="container screen">
+  <div class="card">
+    <h2>Sign In</h2>
+    <p class="subtitle">Welcome back. Enter your credentials.</p>
+
+    <label>Username</label>
+    <input type="text" id="username" placeholder="Enter username" value="jeff.cottrone">
+
+    <label>Password</label>
+    <input type="password" id="password" placeholder="Enter password" value="••••••••">
+
+    <button class="btn btn-primary" onclick="showDashboard()">Sign In</button>
+  </div>
+</div>
+
+<!-- SCREEN 2: Wire Transfer -->
+<div id="dashboardScreen" class="container screen hidden">
+  <div class="card">
+    <h2>Wire Transfer</h2>
+    <p class="subtitle">Send a domestic wire from your account.</p>
+
+    <label>From Account</label>
+    <select>
+      <option>Checking ••••4821 — $127,450.00</option>
+      <option>Savings ••••9033 — $85,200.00</option>
+    </select>
+
+    <label>Recipient Name</label>
+    <input type="text" value="Greystone Properties LLC">
+
+    <label>Routing Number</label>
+    <input type="text" value="021000021">
+
+    <label>Account Number</label>
+    <input type="text" value="9876543210">
+
+    <label>Amount</label>
+    <input type="text" value="$50,000.00" style="font-weight:700; font-size:18px;">
+
+    <label>Memo</label>
+    <input type="text" value="March rent — commercial lease">
+
+    <button class="btn btn-danger" onclick="initiateAuthorization()">Send Wire — $50,000.00</button>
+
+    <div id="successBanner" class="success-banner">
+      <div class="check">&#10003;</div>
+      <p>Wire Transfer Authorized</p>
+      <p class="detail">Cryptographic receipt generated and stored</p>
+    </div>
+  </div>
+
+  <!-- Authorized details (replaces form) -->
+  <div id="authorizedScreen" class="authorized-screen">
+    <div class="big-check">&#10003;</div>
+    <h2>Wire Transfer Authorized</h2>
+    <div class="card" style="margin-top:24px;">
+      <div class="details">
+        <div class="row"><span class="label">Amount</span><span class="value">$50,000.00</span></div>
+        <div class="row"><span class="label">Recipient</span><span class="value">Greystone Properties LLC</span></div>
+        <div class="row"><span class="label">Account</span><span class="value">••••4821</span></div>
+        <div class="row"><span class="label">Authorization</span><span class="value" style="color:#28a745;">Biometric ✓</span></div>
+        <div class="row"><span class="label">Receipt</span><span class="value" style="color:#4A7FC1;">Secure Enclave P256</span></div>
+        <div class="row"><span class="label">Timestamp</span><span class="value" id="authTimestamp">—</span></div>
+      </div>
+      <div style="text-align:center;">
+        <div class="tm-badge">&#x1f6e1; Secured by TrustMesh</div>
+      </div>
+    </div>
+    <button class="btn btn-primary" style="margin-top:24px;" onclick="resetDemo()">Reset Demo</button>
+  </div>
+</div>
+
+<!-- TrustMesh Authorization Modal -->
+<div id="tmOverlay" class="tm-overlay">
+  <div class="tm-modal">
+    <div class="shield">&#x1f6e1;</div>
+    <h3>TrustMesh Authorization Required</h3>
+    <p class="tm-sub">This transaction requires biometric verification via TrustMesh.</p>
+
+    <div id="tmWaiting">
+      <div class="session-code" id="sessionCodeDisplay">------</div>
+
+      <div class="instructions">
+        <strong>On your iPhone:</strong><br>
+        1. Open <strong>TrustMesh</strong> app<br>
+        2. Go to <strong>Session</strong> tab<br>
+        3. Tap <strong>Join Session</strong><br>
+        4. Enter the code above<br>
+        5. Authorize with <strong>Face ID</strong>
+      </div>
+
+      <div class="status-waiting">
+        <div class="spinner"></div>
+        <span class="status-text" id="statusText">Creating session...</span>
+      </div>
+    </div>
+
+    <div id="tmSuccess" class="hidden" style="margin-top:20px;">
+      <div style="font-size:64px; color:#28a745;">&#10003;</div>
+      <h3 style="color:#28a745; margin-top:12px;">Authorized</h3>
+      <p class="tm-sub">Biometric receipt verified. Closing...</p>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+let currentSessionCode = null;
+let pollInterval = null;
+
+function showDashboard() {
+  document.getElementById('loginScreen').classList.add('hidden');
+  document.getElementById('dashboardScreen').classList.remove('hidden');
+}
+
+async function initiateAuthorization() {
+  const overlay = document.getElementById('tmOverlay');
+  overlay.classList.add('active');
+  document.getElementById('tmWaiting').classList.remove('hidden');
+  document.getElementById('tmSuccess').classList.add('hidden');
+  document.getElementById('statusText').textContent = 'Creating session...';
+  document.getElementById('sessionCodeDisplay').textContent = '------';
+
+  try {
+    const res = await fetch(`${API}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceID: 'web-demo-chase' })
+    });
+    const data = await res.json();
+    currentSessionCode = data.code;
+    document.getElementById('sessionCodeDisplay').textContent = data.code;
+    document.getElementById('statusText').textContent = 'Waiting for TrustMesh authorization...';
+
+    // Poll for joiner's receipt
+    pollInterval = setInterval(checkSession, 2000);
+  } catch (e) {
+    document.getElementById('statusText').textContent = 'Error connecting to server';
+  }
+}
+
+async function checkSession() {
+  if (!currentSessionCode) return;
+  try {
+    const res = await fetch(`${API}/sessions/${currentSessionCode}`);
+    const data = await res.json();
+
+    if (data.joinerDeviceID && !data.joinerReceipt) {
+      document.getElementById('statusText').textContent = 'User joined — waiting for Face ID...';
+    }
+
+    if (data.joinerReceipt) {
+      clearInterval(pollInterval);
+      // Show success in modal
+      document.getElementById('tmWaiting').classList.add('hidden');
+      document.getElementById('tmSuccess').classList.remove('hidden');
+
+      // Close modal after 2s and show authorized screen
+      setTimeout(() => {
+        document.getElementById('tmOverlay').classList.remove('active');
+        document.getElementById('authTimestamp').textContent = new Date().toLocaleString();
+
+        // Hide the form, show authorized details
+        const cards = document.querySelectorAll('#dashboardScreen > .card');
+        cards.forEach(c => c.style.display = 'none');
+        document.getElementById('authorizedScreen').classList.add('active');
+      }, 2000);
+    }
+  } catch (e) {
+    // silently retry
+  }
+}
+
+function resetDemo() {
+  currentSessionCode = null;
+  if (pollInterval) clearInterval(pollInterval);
+  document.getElementById('authorizedScreen').classList.remove('active');
+  const cards = document.querySelectorAll('#dashboardScreen > .card');
+  cards.forEach(c => c.style.display = '');
+  document.getElementById('successBanner').classList.remove('active');
+  document.getElementById('dashboardScreen').classList.add('hidden');
+  document.getElementById('loginScreen').classList.remove('hidden');
+}
+</script>
+
+</body>
+</html>

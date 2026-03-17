@@ -2,8 +2,10 @@ const crypto = require("crypto");
 const express = require("express");
 const Database = require("better-sqlite3");
 
+const path = require("path");
 const app = express();
 app.use(express.json());
+app.use(express.static(path.join(__dirname, "public")));
 
 const db = new Database(process.env.DB_PATH || "trustmesh.db");
 db.pragma("journal_mode = WAL");
