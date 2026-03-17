@@ -41,6 +41,7 @@ db.exec(`
     joinerDeviceID  TEXT,
     creatorReceipt  TEXT,
     joinerReceipt   TEXT,
+    actionText      TEXT,
     status          TEXT NOT NULL DEFAULT 'waiting',
     createdAt       TEXT NOT NULL DEFAULT (datetime('now'))
   )
@@ -80,7 +81,7 @@ const insertSession = db.prepare(
 );
 
 const createSession = db.prepare(
-  `INSERT INTO sessions (code, creatorDeviceID) VALUES (?, ?)`
+  `INSERT INTO sessions (code, creatorDeviceID, actionText) VALUES (?, ?, ?)`
 );
 
 const lookupSession = db.prepare(
@@ -188,7 +189,7 @@ app.post("/verify", (req, res) => {
 
 // Create a new session
 app.post("/sessions", (req, res) => {
-  const { deviceID } = req.body;
+  const { deviceID, actionText } = req.body;
   if (!deviceID) {
     return res.status(400).json({ error: "deviceID is required" });
   }
@@ -202,7 +203,7 @@ app.post("/sessions", (req, res) => {
     if (i === 9) return res.status(500).json({ error: "could not generate unique code" });
   }
 
-  createSession.run(code, deviceID);
+  createSession.run(code, deviceID, actionText || null);
   res.status(201).json({ code, status: "waiting" });
 });
 
@@ -219,7 +220,7 @@ app.post("/sessions/:code/join", (req, res) => {
     return res.status(404).json({ error: "session not found" });
   }
   if (session.creatorDeviceID === deviceID) {
-    return res.json({ status: session.status, role: "creator" });
+    return res.json({ status: session.status, role: "creator", actionText: session.actionText || null });
   }
   if (session.joinerDeviceID && session.joinerDeviceID !== deviceID) {
     return res.status(409).json({ error: "session already has two participants" });
@@ -227,7 +228,7 @@ app.post("/sessions/:code/join", (req, res) => {
   if (!session.joinerDeviceID) {
     joinSession.run(deviceID, code);
   }
-  res.json({ status: "joined", role: "joiner" });
+  res.json({ status: "joined", role: "joiner", actionText: session.actionText || null });
 });
 
 // Submit a receipt to a session
@@ -271,6 +272,7 @@ app.get("/sessions/:code", (req, res) => {
   res.json({
     code: session.code,
     status: session.status,
+    actionText: session.actionText || null,
     creatorDeviceID: session.creatorDeviceID,
     joinerDeviceID: session.joinerDeviceID,
     creatorReceipt: session.creatorReceipt ? JSON.parse(session.creatorReceipt) : null,

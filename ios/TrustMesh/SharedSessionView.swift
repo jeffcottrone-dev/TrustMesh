@@ -41,8 +41,11 @@ struct SharedSessionView: View {
                     submittedView
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.tmNavy.ignoresSafeArea())
             .navigationTitle("Shared Session")
             .navigationBarTitleDisplayMode(.inline)
+            .navyTheme()
             .sheet(isPresented: $showReceipt) {
                 if let receipt = currentReceipt {
                     ReceiptView(receipt: receipt, actionText: actionText, referenceID: sessionCode)
@@ -62,11 +65,12 @@ struct SharedSessionView: View {
 
             Image(systemName: "person.2.circle")
                 .font(.system(size: 60))
-                .foregroundColor(.purple)
+                .foregroundColor(.tmBlue)
 
             Text("Shared Session")
                 .font(.title2)
                 .fontWeight(.bold)
+                .foregroundColor(.white)
 
             Text("Both parties enter the same session code, then each authorizes their side. Receipts are linked together as proof.")
                 .font(.subheadline)
@@ -84,7 +88,7 @@ struct SharedSessionView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(Color.purple)
+                .background(Color.tmBlue)
                 .foregroundColor(.white)
                 .cornerRadius(10)
                 .disabled(isLoading)
@@ -94,7 +98,7 @@ struct SharedSessionView: View {
                         .frame(maxWidth: .infinity)
                         .padding()
                         .background(Color.gray.opacity(0.2))
-                        .foregroundColor(.purple)
+                        .foregroundColor(.tmBlue)
                         .cornerRadius(10)
                 }
                 .disabled(isLoading)
@@ -120,14 +124,15 @@ struct SharedSessionView: View {
 
             Image(systemName: "number.circle.fill")
                 .font(.system(size: 50))
-                .foregroundColor(.purple)
+                .foregroundColor(.tmBlue)
 
             Text("Your Session Code")
                 .font(.headline)
+                .foregroundColor(.white)
 
             Text(sessionCode)
                 .font(.system(size: 48, weight: .bold, design: .monospaced))
-                .foregroundColor(.purple)
+                .foregroundColor(.tmBlue)
                 .kerning(8)
 
             Text("Share this code with the other party")
@@ -147,7 +152,7 @@ struct SharedSessionView: View {
                 Text("Continue")
                     .frame(maxWidth: .infinity)
                     .padding()
-                    .background(Color.purple)
+                    .background(Color.tmBlue)
                     .foregroundColor(.white)
                     .cornerRadius(10)
             }
@@ -165,10 +170,11 @@ struct SharedSessionView: View {
 
             Image(systemName: "keyboard")
                 .font(.system(size: 50))
-                .foregroundColor(.purple)
+                .foregroundColor(.tmBlue)
 
             Text("Enter Session Code")
                 .font(.headline)
+                .foregroundColor(.white)
 
             TextField("6-digit code", text: $sessionCode)
                 .font(.system(size: 36, weight: .bold, design: .monospaced))
@@ -200,7 +206,7 @@ struct SharedSessionView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(sessionCode.count >= 6 ? Color.purple : Color.gray)
+                .background(sessionCode.count >= 6 ? Color.tmBlue : Color.tmSilver)
                 .foregroundColor(.white)
                 .cornerRadius(10)
                 .disabled(sessionCode.count < 6 || isLoading)
@@ -221,15 +227,22 @@ struct SharedSessionView: View {
             VStack(spacing: 8) {
                 Text("Session: \(sessionCode)")
                     .font(.system(.headline, design: .monospaced))
-                    .foregroundColor(.purple)
+                    .foregroundColor(.tmBlue)
                 Text("Role: \(role == "creator" ? "Creator" : "Joiner")")
                     .font(.caption)
                     .foregroundColor(.gray)
             }
             .padding(.top)
 
-            TextField("Describe your side of the agreement...", text: $actionText, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
+            TextField("Describe Your Side of the Agreement...", text: $actionText, axis: .vertical)
+                .padding(12)
+                .background(Color.tmNavy.opacity(0.6))
+                .foregroundColor(.white)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.tmSilver, lineWidth: 1)
+                )
+                .cornerRadius(8)
                 .lineLimit(3...6)
                 .padding(.horizontal)
 
@@ -243,7 +256,7 @@ struct SharedSessionView: View {
             }
             .frame(maxWidth: .infinity)
             .padding()
-            .background(actionText.isEmpty ? Color.gray : Color.purple)
+            .background(actionText.isEmpty ? Color.tmSilver : Color.tmBlue)
             .foregroundColor(.white)
             .cornerRadius(10)
             .padding(.horizontal)
@@ -277,15 +290,16 @@ struct SharedSessionView: View {
 
             Image(systemName: partnerSubmitted ? "checkmark.circle.fill" : "hourglass")
                 .font(.system(size: 60))
-                .foregroundColor(partnerSubmitted ? .green : .purple)
+                .foregroundColor(partnerSubmitted ? .green : .tmBlue)
 
             Text(partnerSubmitted ? "Session Complete" : "Waiting for Partner")
                 .font(.title2)
                 .fontWeight(.bold)
+                .foregroundColor(.white)
 
             Text("Session: \(sessionCode)")
                 .font(.system(.headline, design: .monospaced))
-                .foregroundColor(.purple)
+                .foregroundColor(.tmBlue)
 
             if partnerSubmitted {
                 Text("Both parties have submitted their authorization receipts. The session is complete.")
@@ -300,7 +314,7 @@ struct SharedSessionView: View {
                     Label("View Your Receipt", systemImage: "doc.text")
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .background(Color.purple)
+                        .background(Color.tmBlue)
                         .foregroundColor(.white)
                         .cornerRadius(10)
                 }
@@ -313,7 +327,7 @@ struct SharedSessionView: View {
                     .padding(.horizontal)
 
                 ProgressView()
-                    .tint(.purple)
+                    .tint(.tmBlue)
             }
 
             Spacer()
@@ -383,6 +397,10 @@ struct SharedSessionView: View {
 
                 let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
                 role = json?["role"] as? String ?? "joiner"
+                // Pre-fill action text from session creator (e.g. web demo)
+                if let serverAction = json?["actionText"] as? String, !serverAction.isEmpty {
+                    actionText = serverAction
+                }
                 mode = .ready
             } catch {
                 errorMessage = error.localizedDescription
@@ -412,7 +430,12 @@ struct SharedSessionView: View {
                 try await submitReceiptToServer(receipt: receipt)
 
                 mode = .submitted
-                startPollingForPartner()
+                if role == "joiner" {
+                    // Joiner's part is done — no need to wait for creator
+                    partnerSubmitted = true
+                } else {
+                    startPollingForPartner()
+                }
             } catch {
                 errorMessage = error.localizedDescription
             }

@@ -225,7 +225,7 @@ async function showTrustMeshModal(title, subtitle, actionLabel, onSuccess) {
     const res = await fetch(`${API}/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceID: 'web-demo-chase' })
+      body: JSON.stringify({ deviceID: 'web-demo-chase', actionText: actionLabel })
     });
     const data = await res.json();
     currentSessionCode = data.code;
