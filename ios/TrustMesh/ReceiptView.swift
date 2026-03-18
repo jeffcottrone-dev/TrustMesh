@@ -75,7 +75,7 @@ struct ReceiptView: View {
                             Image(systemName: sent ? "checkmark.circle.fill" : "paperplane.fill")
                                 .foregroundColor(sent ? .green : .white)
                                 .padding(10)
-                                .background(recipient.isEmpty ? Color.gray : Color.blue)
+                                .background(recipient.isEmpty ? Color.tmSilver : Color.tmBlue)
                                 .cornerRadius(8)
                         }
                         .disabled(recipient.isEmpty)
@@ -96,7 +96,7 @@ struct ReceiptView: View {
                             Label("Share QR", systemImage: "square.and.arrow.up")
                                 .frame(maxWidth: .infinity)
                                 .padding()
-                                .background(Color.blue)
+                                .background(Color.tmBlue)
                                 .foregroundColor(.white)
                                 .cornerRadius(10)
                         }
@@ -133,7 +133,7 @@ struct ReceiptView: View {
             }
             .padding(.vertical, 32)
         }
-        .background(Color.black.ignoresSafeArea())
+        .background(Color.tmNavy.ignoresSafeArea())
         .onAppear {
             qrImage = generateQRCode()
         }
