@@ -60,12 +60,6 @@ final class ReceiptGenerator {
     // MARK: - Register device with backend
 
     func registerDeviceIfNeeded() async {
-        let key = "trustmesh.device.registered"
-        if UserDefaults.standard.bool(forKey: key) {
-            print("ReceiptGenerator: device already registered")
-            return
-        }
-
         let keyManager = KeyManager.shared
         let deviceID = keyManager.deviceID()
         let publicKey = keyManager.publicKeyBase64
@@ -75,6 +69,14 @@ final class ReceiptGenerator {
             return
         }
 
+        // Always verify the backend actually has our key (survives Railway redeploys)
+        let backendHasKey = await checkBackendRegistration(deviceID: deviceID)
+        if backendHasKey {
+            print("ReceiptGenerator: backend confirms device is registered")
+            return
+        }
+
+        print("ReceiptGenerator: device not on backend, registering...")
         let url = URL(string: "\(backendURL)/keys")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -89,24 +91,28 @@ final class ReceiptGenerator {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             if let http = response as? HTTPURLResponse, http.statusCode == 201 {
-                UserDefaults.standard.set(true, forKey: key)
                 print("ReceiptGenerator: device registered successfully")
             } else {
-                let body = String(data: data, encoding: .utf8) ?? "no body"
-                print("ReceiptGenerator: registration response: \(body)")
+                let respBody = String(data: data, encoding: .utf8) ?? "no body"
+                print("ReceiptGenerator: registration response: \(respBody)")
             }
         } catch {
             print("ReceiptGenerator: registration failed: \(error)")
         }
+    }
 
-        // Verify by fetching our own key
+    /// Check if the backend already has this device's public key.
+    private func checkBackendRegistration(deviceID: String) async -> Bool {
         do {
             let lookupURL = URL(string: "\(backendURL)/keys/\(deviceID)")!
-            let (data, _) = try await URLSession.shared.data(from: lookupURL)
-            let body = String(data: data, encoding: .utf8) ?? ""
-            print("ReceiptGenerator: backend lookup: \(body)")
+            let (_, response) = try await URLSession.shared.data(from: lookupURL)
+            if let http = response as? HTTPURLResponse {
+                return http.statusCode == 200
+            }
         } catch {
-            print("ReceiptGenerator: lookup failed: \(error)")
+            print("ReceiptGenerator: backend check failed: \(error)")
         }
+        // If we can't reach the backend, don't block — try registering anyway
+        return false
     }
 }
