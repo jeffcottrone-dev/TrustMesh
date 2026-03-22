@@ -257,6 +257,7 @@
 				DEVELOPMENT_TEAM = N9CW3VRYZ7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "TrustMesh\n  uses the camera to scan receipt QR codes\n  uses the camera to scan receipt QR codes";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "TrustMesh uses Face ID to authorize actions with your\n  Secure Enclave key";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -292,6 +293,7 @@
 				DEVELOPMENT_TEAM = N9CW3VRYZ7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "TrustMesh\n  uses the camera to scan receipt QR codes\n  uses the camera to scan receipt QR codes";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "TrustMesh uses Face ID to authorize actions with your\n  Secure Enclave key";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

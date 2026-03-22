@@ -18,6 +18,7 @@ struct SharedSessionView: View {
     @State private var role: String = ""
     @State private var partnerSubmitted = false
     @State private var pollTimer: Timer?
+    var deepLink = DeepLinkManager.shared
 
     private let backendURL = "https://trustmesh-production.up.railway.app"
 
@@ -54,6 +55,22 @@ struct SharedSessionView: View {
         }
         .onDisappear {
             pollTimer?.invalidate()
+        }
+        .onChange(of: deepLink.pendingSessionCode) {
+            if let code = deepLink.pendingSessionCode {
+                resetState()
+                sessionCode = code
+                deepLink.pendingSessionCode = nil
+                joinSessionOnServer()
+            }
+        }
+        .onAppear {
+            if let code = deepLink.pendingSessionCode {
+                resetState()
+                sessionCode = code
+                deepLink.pendingSessionCode = nil
+                joinSessionOnServer()
+            }
         }
     }
 

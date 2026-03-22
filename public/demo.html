@@ -2,7 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Chase">
+<link rel="apple-touch-icon" href="/chase-icon.svg">
+<link rel="manifest" href="/manifest.json">
 <title>Chase Bank — Online Banking</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -233,6 +238,9 @@ async function showTrustMeshModal(title, subtitle, actionLabel, onSuccess) {
     document.getElementById('statusText').textContent = 'Waiting for TrustMesh authorization...';
 
     pollInterval = setInterval(checkSession, 2000);
+
+    // Auto-open TrustMesh via URL scheme (works when app is installed)
+    window.location.href = 'trustmesh://session/' + data.code;
   } catch (e) {
     document.getElementById('statusText').textContent = 'Error connecting to server';
   }
@@ -285,6 +293,14 @@ function resetDemo() {
   document.getElementById('dashboardScreen').classList.add('hidden');
   document.getElementById('loginScreen').classList.remove('hidden');
 }
+
+// When PWA returns to foreground, immediately check session status
+// (setInterval may not survive being backgrounded on iOS)
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && currentSessionCode) {
+    checkSession();
+  }
+});
 </script>
 
 </body>

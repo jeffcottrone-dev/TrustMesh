@@ -34,20 +34,33 @@ extension View {
 }
 
 struct ContentView: View {
+    @State private var selectedTab = 0
+    var deepLink = DeepLinkManager.shared
+
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             ProtectedAppsView()
                 .tabItem { Label("Apps", systemImage: "lock.shield") }
+                .tag(0)
             AuthorizeView()
                 .tabItem { Label("Authorize", systemImage: "signature") }
+                .tag(1)
             SharedSessionView()
                 .tabItem { Label("Session", systemImage: "person.2") }
+                .tag(2)
             HistoryView()
                 .tabItem { Label("History", systemImage: "clock") }
+                .tag(3)
             VerifyView()
                 .tabItem { Label("Verify", systemImage: "checkmark.shield") }
+                .tag(4)
         }
         .tint(.tmBlue)
+        .onChange(of: deepLink.pendingSessionCode) {
+            if deepLink.pendingSessionCode != nil {
+                selectedTab = 2
+            }
+        }
     }
 }
 
@@ -71,7 +84,7 @@ struct TMTextField: View {
 // MARK: - Authorize Tab
 
 struct AuthorizeView: View {
-    @State private var actionText = ""
+    @State private var actionText = "Selling couch to Brian Walker — $400 Venmo"
     @State private var statusMessage = ""
     @State private var isLoading = false
     @State private var currentReceipt: Receipt?
