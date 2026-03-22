@@ -292,6 +292,7 @@ async function checkSession() {
 function resetDemo() {
   currentSessionCode = null;
   if (pollInterval) clearInterval(pollInterval);
+  document.getElementById('tmOverlay').classList.remove('active');
   document.getElementById('authorizedScreen').classList.remove('active');
   const cards = document.querySelectorAll('#dashboardScreen > .card');
   cards.forEach(c => c.style.display = '');
@@ -308,6 +309,12 @@ document.addEventListener('visibilitychange', () => {
     if (pollInterval) clearInterval(pollInterval);
     pollInterval = setInterval(checkSession, 2000);
   }
+});
+
+// Always start clean when PWA launches (cold start or restored from cache)
+resetDemo();
+window.addEventListener('pageshow', () => {
+  if (!currentSessionCode) resetDemo();
 });
 </script>
 
