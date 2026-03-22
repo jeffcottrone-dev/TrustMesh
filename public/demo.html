@@ -239,14 +239,10 @@ async function showTrustMeshModal(title, subtitle, actionLabel, onSuccess) {
 
     pollInterval = setInterval(checkSession, 2000);
 
-    // Auto-open TrustMesh via URL scheme (hidden iframe avoids navigating the PWA away)
+    // Auto-open TrustMesh via URL scheme after a brief delay
     setTimeout(() => {
-      const iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
-      iframe.src = 'trustmesh://session/' + data.code;
-      document.body.appendChild(iframe);
-      setTimeout(() => iframe.remove(), 2000);
-    }, 300);
+      window.location.href = 'trustmesh://session/' + data.code;
+    }, 500);
   } catch (e) {
     document.getElementById('statusText').textContent = 'Error connecting to server';
   }
