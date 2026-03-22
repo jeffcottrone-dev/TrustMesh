@@ -239,8 +239,14 @@ async function showTrustMeshModal(title, subtitle, actionLabel, onSuccess) {
 
     pollInterval = setInterval(checkSession, 2000);
 
-    // Auto-open TrustMesh via URL scheme (works when app is installed)
-    window.location.href = 'trustmesh://session/' + data.code;
+    // Auto-open TrustMesh via URL scheme (hidden iframe avoids navigating the PWA away)
+    setTimeout(() => {
+      const iframe = document.createElement('iframe');
+      iframe.style.display = 'none';
+      iframe.src = 'trustmesh://session/' + data.code;
+      document.body.appendChild(iframe);
+      setTimeout(() => iframe.remove(), 2000);
+    }, 300);
   } catch (e) {
     document.getElementById('statusText').textContent = 'Error connecting to server';
   }
@@ -294,11 +300,13 @@ function resetDemo() {
   document.getElementById('loginScreen').classList.remove('hidden');
 }
 
-// When PWA returns to foreground, immediately check session status
-// (setInterval may not survive being backgrounded on iOS)
+// When PWA returns to foreground, check session and restart polling
+// (setInterval gets killed when iOS backgrounds a PWA)
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && currentSessionCode) {
     checkSession();
+    if (pollInterval) clearInterval(pollInterval);
+    pollInterval = setInterval(checkSession, 2000);
   }
 });
 </script>
