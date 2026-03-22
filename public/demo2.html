@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chase Bank — Online Banking</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; color: #1a1a2e; min-height: 100vh; }
+
+  .header { background: #117ACA; padding: 16px 32px; display: flex; align-items: center; gap: 12px; }
+  .header .chase-logo { font-size: 24px; font-weight: 800; color: white; letter-spacing: -0.5px; }
+
+  .container { max-width: 480px; margin: 40px auto; padding: 0 20px; }
+  .card { background: white; border-radius: 12px; padding: 32px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+  .card h2 { font-size: 22px; margin-bottom: 6px; }
+  .card .subtitle { color: #666; font-size: 14px; margin-bottom: 24px; }
+
+  label { display: block; font-size: 13px; font-weight: 600; color: #444; margin-bottom: 6px; margin-top: 16px; }
+  input, select { width: 100%; padding: 12px 14px; border: 1px solid #d0d5dd; border-radius: 8px; font-size: 15px; outline: none; transition: border 0.2s; }
+  input:focus, select:focus { border-color: #117ACA; }
+
+  .btn { width: 100%; padding: 14px; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; margin-top: 24px; transition: all 0.2s; }
+  .btn-primary { background: #117ACA; color: white; }
+  .btn-primary:hover { background: #0e68ad; }
+  .btn-success { background: #28a745; color: white; }
+  .btn-success:hover { background: #218838; }
+
+  /* TrustMesh modal */
+  .tm-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; justify-content: center; align-items: center; }
+  .tm-overlay.active { display: flex; }
+  .tm-modal { background: #1B2A4A; border-radius: 16px; padding: 40px 32px; max-width: 420px; width: 90%; text-align: center; color: white; box-shadow: 0 20px 60px rgba(0,0,0,0.4); }
+  .tm-modal .shield { font-size: 48px; margin-bottom: 16px; }
+  .tm-modal h3 { font-size: 20px; margin-bottom: 8px; }
+  .tm-modal .tm-sub { color: #BFC7D1; font-size: 14px; margin-bottom: 24px; }
+  .tm-modal .session-code { font-size: 42px; font-weight: 800; letter-spacing: 8px; color: #4A7FC1; font-family: 'SF Mono', 'Fira Code', monospace; margin: 16px 0; }
+  .tm-modal .instructions { color: #BFC7D1; font-size: 13px; line-height: 1.6; margin-top: 16px; }
+  .tm-modal .instructions strong { color: white; }
+  .tm-modal .action-label { background: rgba(74,127,193,0.2); border: 1px solid rgba(74,127,193,0.3); border-radius: 8px; padding: 10px 16px; margin: 12px 0; color: #4A7FC1; font-weight: 600; font-size: 14px; }
+
+  .status-waiting { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 20px; }
+  .spinner { width: 20px; height: 20px; border: 3px solid #4A7FC1; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .status-text { color: #4A7FC1; font-size: 14px; font-weight: 500; }
+
+  /* Authorized details */
+  .authorized-screen { display: none; }
+  .authorized-screen.active { display: block; }
+  .authorized-screen .big-check { font-size: 80px; color: #28a745; text-align: center; margin: 40px 0 16px; }
+  .authorized-screen h2 { color: #28a745; text-align: center; }
+  .authorized-screen .details { background: #f8f9fa; border-radius: 8px; padding: 20px; margin-top: 24px; }
+  .authorized-screen .details .row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+  .authorized-screen .details .row:last-child { border: none; }
+  .authorized-screen .details .label { color: #666; font-size: 13px; }
+  .authorized-screen .details .value { font-weight: 600; font-size: 13px; }
+  .tm-badge { display: inline-flex; align-items: center; gap: 6px; background: #1B2A4A; color: #4A7FC1; padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; margin-top: 16px; }
+
+  .protection-banner { background: #1B2A4A; color: #4A7FC1; padding: 8px 16px; font-size: 12px; text-align: center; font-weight: 500; }
+  .protection-banner span { color: #BFC7D1; }
+
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <span class="chase-logo">CHASE</span>
+  <span style="color:rgba(255,255,255,0.6); font-size:14px;">| Online Banking</span>
+</div>
+
+<!-- SCREEN 1: Login -->
+<div id="loginScreen" class="container">
+  <div class="card">
+    <h2>Sign In</h2>
+    <p class="subtitle">Welcome back. Enter your credentials.</p>
+
+    <label>Username</label>
+    <input type="text" id="username" placeholder="Enter username" value="joe.smith">
+
+    <label>Password</label>
+    <input type="password" id="password" placeholder="Enter password" value="password123">
+
+    <button class="btn btn-primary" onclick="loginStep()">Sign In</button>
+  </div>
+</div>
+
+<!-- SCREEN 2: Dashboard / Payment -->
+<div id="dashboardScreen" class="container hidden">
+  <div class="protection-banner">
+    &#x1f6e1; Identity verified with TrustMesh biometric authentication <span>| joe.smith</span>
+  </div>
+  <div class="card" style="margin-top: 16px;">
+    <h2>Send Payment</h2>
+    <p class="subtitle">Confirm your Zelle payment.</p>
+
+    <label>From Account</label>
+    <select>
+      <option>Checking ••••7392 — $4,820.00</option>
+      <option>Savings ••••1155 — $12,300.00</option>
+    </select>
+
+    <label>Recipient</label>
+    <input type="text" value="Jeff Cottrone" readonly>
+
+    <label>Item</label>
+    <input type="text" value="Kitchen Table" readonly>
+
+    <label>Amount</label>
+    <input type="text" value="$250.00" style="font-weight:700; font-size:18px;" readonly>
+
+    <label>Memo</label>
+    <input type="text" value="Kitchen table — Facebook Marketplace">
+
+    <button class="btn btn-success" onclick="paymentStep()">Send $250.00 via Zelle</button>
+  </div>
+
+  <!-- Authorized details -->
+  <div id="authorizedScreen" class="authorized-screen">
+    <div class="big-check">&#10003;</div>
+    <h2>Payment Authorized</h2>
+    <div class="card" style="margin-top:24px;">
+      <div class="details">
+        <div class="row"><span class="label">Amount</span><span class="value">$250.00</span></div>
+        <div class="row"><span class="label">Recipient</span><span class="value">Jeff Cottrone</span></div>
+        <div class="row"><span class="label">Item</span><span class="value">Kitchen Table</span></div>
+        <div class="row"><span class="label">Account</span><span class="value">••••7392</span></div>
+        <div class="row"><span class="label">Login Auth</span><span class="value" style="color:#28a745;">Biometric &#10003;</span></div>
+        <div class="row"><span class="label">Payment Auth</span><span class="value" style="color:#28a745;">Biometric &#10003;</span></div>
+        <div class="row"><span class="label">Receipt</span><span class="value" style="color:#4A7FC1;">Secure Enclave P256</span></div>
+        <div class="row"><span class="label">Timestamp</span><span class="value" id="authTimestamp">—</span></div>
+      </div>
+      <div style="text-align:center;">
+        <div class="tm-badge">&#x1f6e1; Two-factor biometric proof — Secured by TrustMesh</div>
+      </div>
+    </div>
+    <button class="btn btn-primary" style="margin-top:24px;" onclick="resetDemo()">Reset Demo</button>
+  </div>
+</div>
+
+<!-- TrustMesh Authorization Modal -->
+<div id="tmOverlay" class="tm-overlay">
+  <div class="tm-modal">
+    <div class="shield">&#x1f6e1;</div>
+    <h3 id="tmTitle">TrustMesh Authentication Required</h3>
+    <p class="tm-sub" id="tmSubtitle">Verify your identity to continue.</p>
+    <div class="action-label" id="tmAction">Login: joe.smith</div>
+
+    <div id="tmWaiting">
+      <div class="session-code" id="sessionCodeDisplay">------</div>
+
+      <div class="instructions">
+        <strong>On your iPhone:</strong><br>
+        1. Open <strong>TrustMesh</strong> app<br>
+        2. Go to <strong>Session</strong> tab<br>
+        3. Tap <strong>Join Session</strong><br>
+        4. Enter the code above<br>
+        5. Authorize with <strong>Face ID</strong>
+      </div>
+
+      <div class="status-waiting">
+        <div class="spinner"></div>
+        <span class="status-text" id="statusText">Creating session...</span>
+      </div>
+    </div>
+
+    <div id="tmSuccess" class="hidden" style="margin-top:20px;">
+      <div style="font-size:64px; color:#28a745;">&#10003;</div>
+      <h3 style="color:#28a745; margin-top:12px;">Authorized</h3>
+      <p class="tm-sub">Biometric receipt verified.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+let currentSessionCode = null;
+let pollInterval = null;
+let pendingCallback = null;
+
+// STEP 1: Login triggers TrustMesh
+function loginStep() {
+  showTrustMeshModal(
+    'TrustMesh Authentication Required',
+    'Verify your identity to sign in.',
+    'Login: joe.smith @ Chase Online Banking',
+    function() {
+      document.getElementById('loginScreen').classList.add('hidden');
+      document.getElementById('dashboardScreen').classList.remove('hidden');
+    }
+  );
+}
+
+// STEP 2: Payment triggers TrustMesh again
+function paymentStep() {
+  showTrustMeshModal(
+    'TrustMesh Authorization Required',
+    'This transaction requires biometric verification.',
+    'Payment: $250.00 to Jeff Cottrone — Kitchen Table',
+    function() {
+      document.getElementById('authTimestamp').textContent = new Date().toLocaleString();
+      const cards = document.querySelectorAll('#dashboardScreen > .card');
+      cards.forEach(c => c.style.display = 'none');
+      document.querySelector('.protection-banner').style.display = 'none';
+      document.getElementById('authorizedScreen').classList.add('active');
+    }
+  );
+}
+
+async function showTrustMeshModal(title, subtitle, actionLabel, onSuccess) {
+  pendingCallback = onSuccess;
+
+  document.getElementById('tmTitle').textContent = title;
+  document.getElementById('tmSubtitle').textContent = subtitle;
+  document.getElementById('tmAction').textContent = actionLabel;
+  document.getElementById('tmOverlay').classList.add('active');
+  document.getElementById('tmWaiting').classList.remove('hidden');
+  document.getElementById('tmSuccess').classList.add('hidden');
+  document.getElementById('statusText').textContent = 'Creating session...';
+  document.getElementById('sessionCodeDisplay').textContent = '------';
+
+  try {
+    const res = await fetch(`${API}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceID: 'web-demo-chase-2', actionText: actionLabel })
+    });
+    const data = await res.json();
+    currentSessionCode = data.code;
+    document.getElementById('sessionCodeDisplay').textContent = data.code;
+    document.getElementById('statusText').textContent = 'Waiting for TrustMesh authorization...';
+
+    pollInterval = setInterval(checkSession, 2000);
+  } catch (e) {
+    document.getElementById('statusText').textContent = 'Error connecting to server';
+  }
+}
+
+async function checkSession() {
+  if (!currentSessionCode) return;
+  try {
+    const res = await fetch(`${API}/sessions/${currentSessionCode}`);
+    const data = await res.json();
+
+    if (data.joinerDeviceID && !data.joinerReceipt) {
+      document.getElementById('statusText').textContent = 'User joined — waiting for Face ID...';
+    }
+
+    if (data.joinerReceipt) {
+      clearInterval(pollInterval);
+
+      // Submit creator's acknowledgment
+      fetch(`${API}/sessions/${currentSessionCode}/receipt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          deviceID: 'web-demo-chase-2',
+          receipt: { type: 'web-ack', authorized: true, timestamp: new Date().toISOString() }
+        })
+      }).catch(() => {});
+
+      // Show success
+      document.getElementById('tmWaiting').classList.add('hidden');
+      document.getElementById('tmSuccess').classList.remove('hidden');
+
+      setTimeout(() => {
+        document.getElementById('tmOverlay').classList.remove('active');
+        if (pendingCallback) pendingCallback();
+        pendingCallback = null;
+        currentSessionCode = null;
+      }, 1500);
+    }
+  } catch (e) {}
+}
+
+function resetDemo() {
+  currentSessionCode = null;
+  if (pollInterval) clearInterval(pollInterval);
+  document.getElementById('tmOverlay').classList.remove('active');
+  document.getElementById('authorizedScreen').classList.remove('active');
+  const cards = document.querySelectorAll('#dashboardScreen > .card');
+  cards.forEach(c => c.style.display = '');
+  document.querySelector('.protection-banner').style.display = '';
+  document.getElementById('dashboardScreen').classList.add('hidden');
+  document.getElementById('loginScreen').classList.remove('hidden');
+}
+</script>
+
+</body>
+</html>
