@@ -34,32 +34,102 @@ extension View {
 }
 
 struct ContentView: View {
-    @State private var selectedTab = 0
     var deepLink = DeepLinkManager.shared
+    @State private var isProcessingDeepLink = false
+    @State private var deepLinkReceipt: Receipt?
+    @State private var deepLinkActionText = ""
+    @State private var deepLinkSessionCode = ""
+
+    private let backendURL = "https://trustmesh-production.up.railway.app"
 
     var body: some View {
-        TabView(selection: $selectedTab) {
+        TabView {
             ProtectedAppsView()
                 .tabItem { Label("Apps", systemImage: "lock.shield") }
-                .tag(0)
             AuthorizeView()
                 .tabItem { Label("Authorize", systemImage: "signature") }
-                .tag(1)
             SharedSessionView()
                 .tabItem { Label("Session", systemImage: "person.2") }
-                .tag(2)
             HistoryView()
                 .tabItem { Label("History", systemImage: "clock") }
-                .tag(3)
             VerifyView()
                 .tabItem { Label("Verify", systemImage: "checkmark.shield") }
-                .tag(4)
         }
         .tint(.tmBlue)
         .onChange(of: deepLink.pendingSessionCode) {
-            if deepLink.pendingSessionCode != nil {
-                selectedTab = 2
+            if let code = deepLink.pendingSessionCode {
+                deepLink.pendingSessionCode = nil
+                deepLinkReceipt = nil
+                deepLinkSessionCode = code
+                isProcessingDeepLink = true
+                Task { await handleDeepLink(code: code) }
             }
+        }
+        .fullScreenCover(isPresented: $isProcessingDeepLink, onDismiss: {
+            deepLinkReceipt = nil
+            deepLinkActionText = ""
+            deepLinkSessionCode = ""
+        }) {
+            if let receipt = deepLinkReceipt {
+                ReceiptView(receipt: receipt, actionText: deepLinkActionText, referenceID: deepLinkSessionCode)
+            } else {
+                ZStack {
+                    Color.tmNavy.ignoresSafeArea()
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .tint(.tmBlue)
+                            .scaleEffect(1.5)
+                        Text("Authorizing...")
+                            .font(.headline)
+                            .foregroundColor(.tmBlue)
+                    }
+                }
+            }
+        }
+    }
+
+    private func handleDeepLink(code: String) async {
+        do {
+            // 1. Join session silently to get action text
+            let deviceID = KeyManager.shared.deviceID()
+            let joinURL = URL(string: "\(backendURL)/sessions/\(code)/join")!
+            var joinRequest = URLRequest(url: joinURL)
+            joinRequest.httpMethod = "POST"
+            joinRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            joinRequest.httpBody = try JSONSerialization.data(withJSONObject: ["deviceID": deviceID])
+
+            let (joinData, _) = try await URLSession.shared.data(for: joinRequest)
+            let joinJSON = try JSONSerialization.jsonObject(with: joinData) as? [String: Any]
+            let actionText = joinJSON?["actionText"] as? String ?? "Authorization requested"
+
+            // 2. Face ID + generate receipt
+            let fullAction = "[\(code)] \(actionText)"
+            let receipt = try await ReceiptGenerator.shared.generateReceipt(actionText: fullAction)
+
+            // 3. Save to local history
+            ReceiptStore.shared.save(receipt: receipt, actionText: fullAction, referenceID: code)
+
+            // 4. Submit receipt to server (so Chase PWA detects it)
+            let receiptURL = URL(string: "\(backendURL)/sessions/\(code)/receipt")!
+            var receiptRequest = URLRequest(url: receiptURL)
+            receiptRequest.httpMethod = "POST"
+            receiptRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .sortedKeys
+            let receiptData = try encoder.encode(receipt)
+            let receiptJSON = try JSONSerialization.jsonObject(with: receiptData)
+            receiptRequest.httpBody = try JSONSerialization.data(withJSONObject: [
+                "deviceID": deviceID,
+                "receipt": receiptJSON
+            ])
+            _ = try await URLSession.shared.data(for: receiptRequest)
+
+            // 5. Show receipt (fullScreenCover transitions from loading → receipt)
+            deepLinkReceipt = receipt
+            deepLinkActionText = actionText
+        } catch {
+            print("Deep link auth error: \(error)")
+            isProcessingDeepLink = false
         }
     }
 }
@@ -83,7 +153,15 @@ struct TMTextField: View {
 
 // MARK: - Authorize Tab
 
+enum AuthMode: String, CaseIterable {
+    case receipt = "Receipt"
+    case message = "Message"
+}
+
 struct AuthorizeView: View {
+    @State private var authMode: AuthMode = .receipt
+
+    // Receipt mode state
     @State private var actionText = "Selling couch to Brian Walker — $400 Venmo"
     @State private var statusMessage = ""
     @State private var isLoading = false
@@ -91,19 +169,36 @@ struct AuthorizeView: View {
     @State private var currentActionText = ""
     @State private var showReceipt = false
 
+    // Message mode state
+    @State private var messageText = ""
+    @State private var selectedChannel: MessageChannel = .sms
+    @State private var includeMessageText = true
+    @State private var currentArtifact: VerifiedMessageArtifact?
+    @State private var currentMessageText = ""
+    @State private var currentChannel: MessageChannel = .sms
+    @State private var showArtifact = false
+
     var body: some View {
         NavigationStack {
             ZStack {
                 Color.tmNavy.ignoresSafeArea()
 
                 VStack(spacing: 20) {
-                    TMTextField(placeholder: "Describe the Action to Authorize...", text: $actionText)
-                        .padding(.horizontal)
-                        .submitLabel(.done)
-                        .onSubmit { dismissKeyboard() }
+                    // Mode picker
+                    Picker("Mode", selection: $authMode) {
+                        ForEach(AuthMode.allCases, id: \.self) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
 
-                    authorizeButton
-                        .padding(.horizontal)
+                    switch authMode {
+                    case .receipt:
+                        receiptModeView
+                    case .message:
+                        messageModeView
+                    }
 
                     if !statusMessage.isEmpty {
                         Text(statusMessage)
@@ -125,6 +220,25 @@ struct AuthorizeView: View {
                     ReceiptView(receipt: receipt, actionText: currentActionText)
                 }
             }
+            .sheet(isPresented: $showArtifact) {
+                if let artifact = currentArtifact {
+                    MessageArtifactView(artifact: artifact, messageText: currentMessageText, channel: currentChannel)
+                }
+            }
+        }
+    }
+
+    // MARK: - Receipt Mode (existing)
+
+    private var receiptModeView: some View {
+        VStack(spacing: 20) {
+            TMTextField(placeholder: "Describe the Action to Authorize...", text: $actionText)
+                .padding(.horizontal)
+                .submitLabel(.done)
+                .onSubmit { dismissKeyboard() }
+
+            authorizeButton
+                .padding(.horizontal)
         }
     }
 
@@ -149,6 +263,77 @@ struct AuthorizeView: View {
         .disabled(actionText.isEmpty || isLoading)
     }
 
+    // MARK: - Message Mode (new)
+
+    private var messageModeView: some View {
+        VStack(spacing: 20) {
+            // Channel picker
+            HStack(spacing: 12) {
+                ForEach(MessageChannel.allCases, id: \.self) { ch in
+                    Button {
+                        selectedChannel = ch
+                    } label: {
+                        VStack(spacing: 4) {
+                            Image(systemName: ch.icon)
+                                .font(.title3)
+                            Text(ch.label)
+                                .font(.caption2)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(selectedChannel == ch ? Color.tmBlue : Color.white.opacity(0.08))
+                        .foregroundColor(selectedChannel == ch ? .white : .tmSilver)
+                        .cornerRadius(10)
+                    }
+                }
+            }
+            .padding(.horizontal)
+
+            // Message text field
+            TMTextField(placeholder: "Enter message to sign...", text: $messageText, axis: .vertical)
+                .padding(.horizontal)
+                .lineLimit(3...6)
+                .submitLabel(.done)
+                .onSubmit { dismissKeyboard() }
+
+            // Include text toggle
+            Toggle(isOn: $includeMessageText) {
+                HStack(spacing: 6) {
+                    Image(systemName: "eye")
+                        .foregroundColor(.tmSilver)
+                    Text("Include message text (verifiers can read it)")
+                        .font(.caption)
+                        .foregroundColor(.tmSilver)
+                }
+            }
+            .tint(.tmBlue)
+            .padding(.horizontal)
+
+            // Sign button
+            Button(action: {
+                dismissKeyboard()
+                signMessage()
+            }) {
+                Group {
+                    if isLoading {
+                        ProgressView().tint(.white)
+                    } else {
+                        Label("Sign with Face ID", systemImage: "faceid")
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(messageText.isEmpty ? Color.tmSilver : Color.tmBlue)
+                .foregroundColor(.white)
+                .cornerRadius(10)
+            }
+            .disabled(messageText.isEmpty || isLoading)
+            .padding(.horizontal)
+        }
+    }
+
+    // MARK: - Actions
+
     private func generateReceipt() {
         isLoading = true
         statusMessage = ""
@@ -158,6 +343,28 @@ struct AuthorizeView: View {
                 currentReceipt = receipt
                 currentActionText = actionText
                 showReceipt = true
+                statusMessage = ""
+            } catch {
+                statusMessage = "Error: \(error.localizedDescription)"
+            }
+            isLoading = false
+        }
+    }
+
+    private func signMessage() {
+        isLoading = true
+        statusMessage = ""
+        Task {
+            do {
+                let artifact = try await MessageGenerator.shared.generateSignedMessage(
+                    messageText: messageText,
+                    channel: selectedChannel,
+                    includeText: includeMessageText
+                )
+                currentArtifact = artifact
+                currentMessageText = messageText
+                currentChannel = selectedChannel
+                showArtifact = true
                 statusMessage = ""
             } catch {
                 statusMessage = "Error: \(error.localizedDescription)"

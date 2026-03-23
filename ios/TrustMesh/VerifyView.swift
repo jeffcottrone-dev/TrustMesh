@@ -7,11 +7,21 @@
 
 import SwiftUI
 
+enum VerifyType: String, CaseIterable {
+    case receipt = "Receipt"
+    case message = "Message"
+}
+
 struct VerifyView: View {
+    @State private var verifyType: VerifyType = .receipt
     @State private var mode: VerifyMode = .choose
     @State private var pastedJSON = ""
     @State private var result: VerificationResult?
+    @State private var messageResult: MessageVerificationResult?
     @State private var isVerifying = false
+
+    // Deep link support
+    var deepLink = DeepLinkManager.shared
 
     enum VerifyMode {
         case choose, scan, paste, result
@@ -22,18 +32,54 @@ struct VerifyView: View {
             ZStack {
                 Color.tmNavy.ignoresSafeArea()
 
-                Group {
-                    switch mode {
-                    case .choose: chooseView
-                    case .scan: scanView
-                    case .paste: pasteView
-                    case .result: resultView
+                VStack(spacing: 0) {
+                    // Type picker
+                    Picker("Type", selection: $verifyType) {
+                        ForEach(VerifyType.allCases, id: \.self) { type in
+                            Text(type.rawValue).tag(type)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+                    .onChange(of: verifyType) {
+                        // Reset state when switching
+                        mode = .choose
+                        result = nil
+                        messageResult = nil
+                        pastedJSON = ""
+                    }
+
+                    Group {
+                        switch mode {
+                        case .choose: chooseView
+                        case .scan: scanView
+                        case .paste: pasteView
+                        case .result:
+                            if verifyType == .receipt {
+                                receiptResultView
+                            } else {
+                                messageResultView
+                            }
+                        }
                     }
                 }
             }
-            .navigationTitle("Verify Receipt")
+            .navigationTitle("Verify")
             .navigationBarTitleDisplayMode(.inline)
             .navyTheme()
+            .onChange(of: deepLink.pendingVerifyMessageId) {
+                if let messageId = deepLink.pendingVerifyMessageId {
+                    deepLink.pendingVerifyMessageId = nil
+                    verifyType = .message
+                    isVerifying = true
+                    Task {
+                        messageResult = await VerificationService.shared.verifyMessageById(messageId)
+                        mode = .result
+                        isVerifying = false
+                    }
+                }
+            }
         }
     }
 
@@ -43,16 +89,18 @@ struct VerifyView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            Image(systemName: "checkmark.shield")
+            Image(systemName: verifyType == .receipt ? "checkmark.shield" : "envelope.badge.shield.half.filled")
                 .font(.system(size: 60))
                 .foregroundColor(.tmBlue)
 
-            Text("Verify a Receipt")
+            Text(verifyType == .receipt ? "Verify a Receipt" : "Verify a Message")
                 .font(.title2)
                 .fontWeight(.bold)
                 .foregroundColor(.white)
 
-            Text("Scan a QR code or paste receipt data to verify its authenticity")
+            Text(verifyType == .receipt
+                 ? "Scan a QR code or paste receipt data to verify its authenticity"
+                 : "Scan a QR code, paste a URL, or paste message data to verify")
                 .font(.subheadline)
                 .foregroundColor(.tmSilver)
                 .multilineTextAlignment(.center)
@@ -69,7 +117,8 @@ struct VerifyView: View {
                 }
 
                 Button { mode = .paste } label: {
-                    Label("Paste Receipt Data", systemImage: "doc.on.clipboard")
+                    Label(verifyType == .receipt ? "Paste Receipt Data" : "Paste URL or Data",
+                          systemImage: "doc.on.clipboard")
                         .frame(maxWidth: .infinity)
                         .padding()
                         .background(Color.white.opacity(0.1))
@@ -88,7 +137,11 @@ struct VerifyView: View {
     private var scanView: some View {
         ZStack {
             QRScannerView { scannedString in
-                verify(json: scannedString)
+                if verifyType == .receipt {
+                    verifyReceipt(json: scannedString)
+                } else {
+                    verifyMessageInput(scannedString)
+                }
             }
             .ignoresSafeArea()
 
@@ -113,6 +166,13 @@ struct VerifyView: View {
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.tmSilver, lineWidth: 1))
                 .padding(.horizontal)
 
+            if verifyType == .message {
+                Text("Paste a verification URL or message artifact JSON")
+                    .font(.caption)
+                    .foregroundColor(.tmSilver)
+                    .padding(.horizontal)
+            }
+
             HStack(spacing: 16) {
                 Button("Back") { mode = .choose }
                     .padding()
@@ -121,7 +181,13 @@ struct VerifyView: View {
                     .foregroundColor(.white)
                     .cornerRadius(10)
 
-                Button { verify(json: pastedJSON) } label: {
+                Button {
+                    if verifyType == .receipt {
+                        verifyReceipt(json: pastedJSON)
+                    } else {
+                        verifyMessageInput(pastedJSON)
+                    }
+                } label: {
                     Group {
                         if isVerifying { ProgressView() } else { Text("Verify") }
                     }
@@ -138,58 +204,125 @@ struct VerifyView: View {
         .padding(.top)
     }
 
-    // MARK: - Result
+    // MARK: - Receipt Result
 
-    private var resultView: some View {
+    private var receiptResultView: some View {
         VStack(spacing: 24) {
             Spacer()
 
-            resultContent
+            switch result {
+            case .valid(let action, let timestamp, let deviceID):
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 80))
+                    .foregroundColor(.green)
+                Text("VERIFIED")
+                    .font(.largeTitle)
+                    .fontWeight(.black)
+                    .foregroundColor(.green)
+                VStack(spacing: 12) {
+                    Text(action)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.center)
+                    Text(formatDate(timestamp))
+                        .font(.subheadline)
+                        .foregroundColor(.tmSilver)
+                    Text("Device: \(String(deviceID.prefix(8)))...")
+                        .font(.caption)
+                        .foregroundColor(.tmSilver)
+                        .fontDesign(.monospaced)
+                }
+                .padding(.horizontal)
+
+            case .invalid(let reason):
+                invalidView(reason: reason)
+
+            case .none:
+                EmptyView()
+            }
 
             Spacer()
-
-            Button("Verify Another") {
-                result = nil
-                pastedJSON = ""
-                mode = .choose
-            }
-            .padding()
-            .frame(maxWidth: .infinity)
-            .background(Color.tmBlue)
-            .foregroundColor(.white)
-            .cornerRadius(10)
-            .padding(.horizontal)
-            .padding(.bottom)
+            verifyAnotherButton
         }
     }
 
-    @ViewBuilder
-    private var resultContent: some View {
-        switch result {
-        case .valid(let action, let timestamp, let deviceID):
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 80))
-                .foregroundColor(.green)
-            Text("VERIFIED")
-                .font(.largeTitle)
-                .fontWeight(.black)
-                .foregroundColor(.green)
-            VStack(spacing: 12) {
-                Text(action)
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .multilineTextAlignment(.center)
-                Text(formatDate(timestamp))
-                    .font(.subheadline)
-                    .foregroundColor(.tmSilver)
-                Text("Device: \(String(deviceID.prefix(8)))...")
-                    .font(.caption)
-                    .foregroundColor(.tmSilver)
-                    .fontDesign(.monospaced)
-            }
-            .padding(.horizontal)
+    // MARK: - Message Result
 
-        case .invalid(let reason):
+    private var messageResultView: some View {
+        VStack(spacing: 24) {
+            Spacer()
+
+            switch messageResult {
+            case .valid(let sender, let channel, let timestamp, let message):
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 80))
+                    .foregroundColor(.green)
+                Text("VERIFIED")
+                    .font(.largeTitle)
+                    .fontWeight(.black)
+                    .foregroundColor(.green)
+                VStack(spacing: 12) {
+                    HStack(spacing: 8) {
+                        let ch = MessageChannel(rawValue: channel) ?? .other
+                        Image(systemName: ch.icon)
+                            .foregroundColor(.tmBlue)
+                        Text(ch.label)
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.tmBlue)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.tmBlue.opacity(0.2))
+                            .cornerRadius(8)
+                    }
+
+                    Text("From: \(sender)")
+                        .font(.headline)
+                        .foregroundColor(.white)
+
+                    if let msg = message, !msg.isEmpty {
+                        Text(msg)
+                            .font(.body)
+                            .foregroundColor(.white.opacity(0.9))
+                            .multilineTextAlignment(.center)
+                            .padding()
+                            .background(Color.white.opacity(0.08))
+                            .cornerRadius(10)
+                    }
+
+                    Text(formatDate(timestamp))
+                        .font(.subheadline)
+                        .foregroundColor(.tmSilver)
+                }
+                .padding(.horizontal)
+
+            case .invalid(let reason):
+                invalidView(reason: reason)
+
+            case .none:
+                if isVerifying {
+                    ProgressView()
+                        .tint(.tmBlue)
+                        .scaleEffect(1.5)
+                    Text("Verifying...")
+                        .font(.headline)
+                        .foregroundColor(.tmBlue)
+                } else {
+                    EmptyView()
+                }
+            }
+
+            Spacer()
+            if !isVerifying {
+                verifyAnotherButton
+            }
+        }
+    }
+
+    // MARK: - Shared Views
+
+    private func invalidView(reason: String) -> some View {
+        VStack(spacing: 16) {
             Image(systemName: "xmark.circle.fill")
                 .font(.system(size: 80))
                 .foregroundColor(.red)
@@ -202,18 +335,52 @@ struct VerifyView: View {
                 .foregroundColor(.tmSilver)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
-
-        case .none:
-            EmptyView()
         }
     }
 
-    // MARK: - Helpers
+    private var verifyAnotherButton: some View {
+        Button("Verify Another") {
+            result = nil
+            messageResult = nil
+            pastedJSON = ""
+            mode = .choose
+        }
+        .padding()
+        .frame(maxWidth: .infinity)
+        .background(Color.tmBlue)
+        .foregroundColor(.white)
+        .cornerRadius(10)
+        .padding(.horizontal)
+        .padding(.bottom)
+    }
 
-    private func verify(json: String) {
+    // MARK: - Actions
+
+    private func verifyReceipt(json: String) {
         isVerifying = true
         Task {
             result = await VerificationService.shared.verifyReceipt(json: json)
+            mode = .result
+            isVerifying = false
+        }
+    }
+
+    private func verifyMessageInput(_ input: String) {
+        isVerifying = true
+        Task {
+            let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if trimmed.hasPrefix("http") {
+                // URL — server-side verify
+                messageResult = await VerificationService.shared.verifyMessageByURL(trimmed)
+            } else if let data = trimmed.data(using: .utf8),
+                      let artifact = try? JSONDecoder().decode(VerifiedMessageArtifact.self, from: data) {
+                // JSON artifact — local P-256 verify
+                messageResult = await VerificationService.shared.verifyMessage(artifact: artifact)
+            } else {
+                messageResult = .invalid(reason: "Could not parse input. Paste a verification URL or message artifact JSON.")
+            }
+
             mode = .result
             isVerifying = false
         }

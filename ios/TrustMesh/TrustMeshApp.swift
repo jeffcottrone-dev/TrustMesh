@@ -16,13 +16,19 @@ struct TrustMeshApp: App {
                     await ReceiptGenerator.shared.registerDeviceIfNeeded()
                 }
                 .onOpenURL { url in
-                    // Handle trustmesh://session/{code}
-                    guard url.scheme == "trustmesh",
-                          url.host == "session",
-                          let code = url.pathComponents.last,
-                          code.count == 6
-                    else { return }
-                    DeepLinkManager.shared.pendingSessionCode = code
+                    guard url.scheme == "trustmesh" else { return }
+
+                    if url.host == "session",
+                       let code = url.pathComponents.last,
+                       code.count == 6 {
+                        // Handle trustmesh://session/{code}
+                        DeepLinkManager.shared.pendingSessionCode = code
+                    } else if url.host == "verify",
+                              let messageId = url.pathComponents.last,
+                              !messageId.isEmpty {
+                        // Handle trustmesh://verify/{messageId}
+                        DeepLinkManager.shared.pendingVerifyMessageId = messageId
+                    }
                 }
         }
     }
