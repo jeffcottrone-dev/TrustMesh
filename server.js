@@ -530,25 +530,25 @@ app.get("/messages/:messageId", (req, res) => {
 
 // Server-side P-256 verification of a signed message
 app.post("/messages/:messageId/verify", (req, res) => {
-  const { receivedText } = req.body;
+  const { receivedText } = req.body || {};
   const msg = lookupMessage.get(req.params.messageId);
   if (!msg) return res.status(404).json({ error: "message not found" });
 
-  // Step 1: Compare received text hash to signed messageHash
-  if (!receivedText) {
-    return res.status(400).json({ error: "receivedText is required — paste the message you received" });
+  // Optional: Compare received text hash to signed messageHash
+  let textMatch = null;
+  if (receivedText) {
+    const receivedHash = crypto.createHash("sha256").update(receivedText).digest("hex");
+    textMatch = receivedHash === msg.messageHash;
+    if (!textMatch) {
+      return res.json({
+        valid: false,
+        textMatch: false,
+        reason: "Message text does not match what was signed — it was tampered with",
+      });
+    }
   }
 
-  const receivedHash = crypto.createHash("sha256").update(receivedText).digest("hex");
-  if (receivedHash !== msg.messageHash) {
-    return res.json({
-      valid: false,
-      textMatch: false,
-      reason: "Message text does not match what was signed — it was tampered with",
-    });
-  }
-
-  // Step 2: Verify P-256 signature on the commitment
+  // Verify P-256 signature on the commitment
   const device = lookupKey.get(msg.deviceID);
   if (!device) return res.status(404).json({ error: "device key not found" });
 
@@ -584,7 +584,7 @@ app.post("/messages/:messageId/verify", (req, res) => {
 
     res.json({
       valid: isValid,
-      textMatch: true,
+      textMatch: textMatch !== null ? textMatch : undefined,
       messageId: msg.messageId,
       channel: msg.channel,
       sender: sender ? sender.displayName : null,
@@ -594,7 +594,7 @@ app.post("/messages/:messageId/verify", (req, res) => {
       createdAt: msg.createdAt,
     });
   } catch (err) {
-    res.json({ valid: false, textMatch: true, error: err.message });
+    res.json({ valid: false, error: err.message });
   }
 });
 

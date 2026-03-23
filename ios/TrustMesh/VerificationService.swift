@@ -193,7 +193,7 @@ final class VerificationService {
 
     // MARK: - Message Verification (by URL — server-side verify)
 
-    func verifyMessageByURL(url: String, receivedText: String) async -> MessageVerificationResult {
+    func verifyMessageByURL(url: String, receivedText: String? = nil) async -> MessageVerificationResult {
         guard let urlObj = URL(string: url),
               let messageId = urlObj.pathComponents.last, !messageId.isEmpty else {
             return .invalid(reason: "Invalid verification URL")
@@ -204,7 +204,7 @@ final class VerificationService {
 
     // MARK: - Message Verification (by ID — server-side verify)
 
-    func verifyMessageById(_ messageId: String, receivedText: String) async -> MessageVerificationResult {
+    func verifyMessageById(_ messageId: String, receivedText: String? = nil) async -> MessageVerificationResult {
         guard let url = URL(string: "\(backendURL)/messages/\(messageId)/verify") else {
             return .invalid(reason: "Invalid message ID")
         }
@@ -213,7 +213,10 @@ final class VerificationService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let body: [String: String] = ["receivedText": receivedText]
+        var body: [String: String] = [:]
+        if let receivedText = receivedText {
+            body["receivedText"] = receivedText
+        }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
