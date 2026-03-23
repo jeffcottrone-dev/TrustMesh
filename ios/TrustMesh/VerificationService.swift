@@ -105,10 +105,19 @@ final class VerificationService {
 
     // MARK: - Message Verification (by artifact JSON — local P-256 verify)
 
-    func verifyMessage(artifact: VerifiedMessageArtifact) async -> MessageVerificationResult {
+    func verifyMessage(artifact: VerifiedMessageArtifact, receivedText: String) async -> MessageVerificationResult {
+        // Step 1: Hash the received text and compare to signed messageHash
+        let receivedHash = SHA256.hash(data: Data(receivedText.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+
+        if receivedHash != artifact.commitment.messageHash {
+            return .invalid(reason: "Message was tampered with — text does not match what was signed")
+        }
+
+        // Step 2: Verify P-256 signature
         let deviceID = artifact.commitment.senderID
 
-        // Fetch public key from backend
         guard let url = URL(string: "\(backendURL)/keys/\(deviceID)") else {
             return .invalid(reason: "Invalid device ID")
         }
@@ -128,7 +137,6 @@ final class VerificationService {
             return .invalid(reason: "Could not reach server: \(error.localizedDescription)")
         }
 
-        // Re-encode commitment with sorted keys
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
 
@@ -139,7 +147,6 @@ final class VerificationService {
             return .invalid(reason: "Could not encode commitment")
         }
 
-        // Verify P-256 signature
         guard let pubKeyData = Data(base64Encoded: serverPublicKeyBase64) else {
             return .invalid(reason: "Invalid public key format")
         }
@@ -154,7 +161,6 @@ final class VerificationService {
 
             if isValid {
                 let timestamp = Date(timeIntervalSince1970: Double(artifact.commitment.timestamp) / 1000.0)
-                // Look up sender name
                 let senderName = await fetchSenderName(deviceID: deviceID) ?? "Device \(String(deviceID.prefix(8)))..."
                 return .valid(
                     sender: senderName,
@@ -172,19 +178,18 @@ final class VerificationService {
 
     // MARK: - Message Verification (by URL — server-side verify)
 
-    func verifyMessageByURL(url: String) async -> MessageVerificationResult {
-        // Extract messageId from URL (last path component)
+    func verifyMessageByURL(url: String, receivedText: String) async -> MessageVerificationResult {
         guard let urlObj = URL(string: url),
               let messageId = urlObj.pathComponents.last, !messageId.isEmpty else {
             return .invalid(reason: "Invalid verification URL")
         }
 
-        return await verifyMessageById(messageId)
+        return await verifyMessageById(messageId, receivedText: receivedText)
     }
 
     // MARK: - Message Verification (by ID — server-side verify)
 
-    func verifyMessageById(_ messageId: String) async -> MessageVerificationResult {
+    func verifyMessageById(_ messageId: String, receivedText: String) async -> MessageVerificationResult {
         guard let url = URL(string: "\(backendURL)/messages/\(messageId)/verify") else {
             return .invalid(reason: "Invalid message ID")
         }
@@ -192,16 +197,26 @@ final class VerificationService {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = Data("{}".utf8)
+
+        let body: [String: String] = ["receivedText": receivedText]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                return .invalid(reason: "Message not found on server")
+                let errorData = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                let errorMsg = errorData?["error"] as? String ?? "Message not found on server"
+                return .invalid(reason: errorMsg)
             }
 
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             let isValid = json?["valid"] as? Bool ?? false
+            let textMatch = json?["textMatch"] as? Bool ?? false
+
+            if !textMatch {
+                let reason = json?["reason"] as? String ?? "Message text does not match what was signed"
+                return .invalid(reason: reason)
+            }
 
             if isValid {
                 let sender = json?["sender"] as? String ?? "Unknown"
@@ -219,7 +234,7 @@ final class VerificationService {
 
                 return .valid(sender: sender, channel: channel, timestamp: timestamp, message: messageText)
             } else {
-                let error = json?["error"] as? String ?? "Verification failed"
+                let error = json?["error"] as? String ?? "Signature verification failed"
                 return .invalid(reason: error)
             }
         } catch {

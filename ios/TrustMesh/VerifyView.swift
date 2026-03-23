@@ -16,15 +16,18 @@ struct VerifyView: View {
     @State private var verifyType: VerifyType = .receipt
     @State private var mode: VerifyMode = .choose
     @State private var pastedJSON = ""
+    @State private var receivedText = ""
+    @State private var scannedURL = ""
     @State private var result: VerificationResult?
     @State private var messageResult: MessageVerificationResult?
     @State private var isVerifying = false
 
     // Deep link support
     var deepLink = DeepLinkManager.shared
+    @State private var deepLinkMessageId: String?
 
     enum VerifyMode {
-        case choose, scan, paste, result
+        case choose, scan, paste, enterMessage, result
     }
 
     var body: some View {
@@ -33,7 +36,6 @@ struct VerifyView: View {
                 Color.tmNavy.ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    // Type picker
                     Picker("Type", selection: $verifyType) {
                         ForEach(VerifyType.allCases, id: \.self) { type in
                             Text(type.rawValue).tag(type)
@@ -43,11 +45,13 @@ struct VerifyView: View {
                     .padding(.horizontal)
                     .padding(.top, 8)
                     .onChange(of: verifyType) {
-                        // Reset state when switching
                         mode = .choose
                         result = nil
                         messageResult = nil
                         pastedJSON = ""
+                        receivedText = ""
+                        scannedURL = ""
+                        deepLinkMessageId = nil
                     }
 
                     Group {
@@ -55,6 +59,7 @@ struct VerifyView: View {
                         case .choose: chooseView
                         case .scan: scanView
                         case .paste: pasteView
+                        case .enterMessage: enterMessageView
                         case .result:
                             if verifyType == .receipt {
                                 receiptResultView
@@ -72,12 +77,9 @@ struct VerifyView: View {
                 if let messageId = deepLink.pendingVerifyMessageId {
                     deepLink.pendingVerifyMessageId = nil
                     verifyType = .message
-                    isVerifying = true
-                    Task {
-                        messageResult = await VerificationService.shared.verifyMessageById(messageId)
-                        mode = .result
-                        isVerifying = false
-                    }
+                    deepLinkMessageId = messageId
+                    receivedText = ""
+                    mode = .enterMessage
                 }
             }
         }
@@ -100,7 +102,7 @@ struct VerifyView: View {
 
             Text(verifyType == .receipt
                  ? "Scan a QR code or paste receipt data to verify its authenticity"
-                 : "Scan a QR code, paste a URL, or paste message data to verify")
+                 : "Scan a QR code or paste a verification URL, then provide the message text to verify")
                 .font(.subheadline)
                 .foregroundColor(.tmSilver)
                 .multilineTextAlignment(.center)
@@ -117,7 +119,7 @@ struct VerifyView: View {
                 }
 
                 Button { mode = .paste } label: {
-                    Label(verifyType == .receipt ? "Paste Receipt Data" : "Paste URL or Data",
+                    Label(verifyType == .receipt ? "Paste Receipt Data" : "Paste Verification URL",
                           systemImage: "doc.on.clipboard")
                         .frame(maxWidth: .infinity)
                         .padding()
@@ -140,7 +142,9 @@ struct VerifyView: View {
                 if verifyType == .receipt {
                     verifyReceipt(json: scannedString)
                 } else {
-                    verifyMessageInput(scannedString)
+                    // QR contains verification URL — proceed to message input
+                    scannedURL = scannedString
+                    mode = .enterMessage
                 }
             }
             .ignoresSafeArea()
@@ -160,18 +164,18 @@ struct VerifyView: View {
 
     private var pasteView: some View {
         VStack(spacing: 16) {
-            TextEditor(text: $pastedJSON)
-                .font(.system(.caption, design: .monospaced))
-                .frame(minHeight: 200)
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.tmSilver, lineWidth: 1))
-                .padding(.horizontal)
-
             if verifyType == .message {
-                Text("Paste a verification URL or message artifact JSON")
+                Text("Paste the verification URL or link from the message")
                     .font(.caption)
                     .foregroundColor(.tmSilver)
                     .padding(.horizontal)
             }
+
+            TextEditor(text: $pastedJSON)
+                .font(.system(.caption, design: .monospaced))
+                .frame(minHeight: 150)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.tmSilver, lineWidth: 1))
+                .padding(.horizontal)
 
             HStack(spacing: 16) {
                 Button("Back") { mode = .choose }
@@ -185,23 +189,85 @@ struct VerifyView: View {
                     if verifyType == .receipt {
                         verifyReceipt(json: pastedJSON)
                     } else {
-                        verifyMessageInput(pastedJSON)
+                        // Move to message text input step
+                        scannedURL = pastedJSON.trimmingCharacters(in: .whitespacesAndNewlines)
+                        mode = .enterMessage
                     }
                 } label: {
-                    Group {
-                        if isVerifying { ProgressView() } else { Text("Verify") }
-                    }
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(pastedJSON.isEmpty ? Color.tmSilver : Color.tmBlue)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
+                    Text(verifyType == .receipt ? "Verify" : "Next")
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(pastedJSON.isEmpty ? Color.tmSilver : Color.tmBlue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
                 }
-                .disabled(pastedJSON.isEmpty || isVerifying)
+                .disabled(pastedJSON.isEmpty)
             }
             .padding(.horizontal)
         }
         .padding(.top)
+    }
+
+    // MARK: - Enter received message text (message mode step 2)
+
+    private var enterMessageView: some View {
+        VStack(spacing: 16) {
+            Spacer()
+
+            Image(systemName: "text.magnifyingglass")
+                .font(.system(size: 40))
+                .foregroundColor(.tmBlue)
+
+            Text("Paste the Message You Received")
+                .font(.title3)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+
+            Text("Paste the exact text from the email, text, or message. If even one character was changed, verification will fail.")
+                .font(.subheadline)
+                .foregroundColor(.tmSilver)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+
+            TextEditor(text: $receivedText)
+                .font(.system(.body))
+                .frame(minHeight: 120)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.tmSilver, lineWidth: 1))
+                .padding(.horizontal)
+
+            HStack(spacing: 16) {
+                Button("Back") {
+                    if deepLinkMessageId != nil {
+                        mode = .choose
+                        deepLinkMessageId = nil
+                    } else {
+                        mode = .paste
+                    }
+                }
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(Color.white.opacity(0.1))
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+
+                Button {
+                    verifyMessageWithText()
+                } label: {
+                    Group {
+                        if isVerifying { ProgressView().tint(.white) } else { Text("Verify") }
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(receivedText.isEmpty ? Color.tmSilver : Color.tmBlue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+                }
+                .disabled(receivedText.isEmpty || isVerifying)
+            }
+            .padding(.horizontal)
+
+            Spacer()
+        }
     }
 
     // MARK: - Receipt Result
@@ -343,6 +409,9 @@ struct VerifyView: View {
             result = nil
             messageResult = nil
             pastedJSON = ""
+            receivedText = ""
+            scannedURL = ""
+            deepLinkMessageId = nil
             mode = .choose
         }
         .padding()
@@ -365,20 +434,21 @@ struct VerifyView: View {
         }
     }
 
-    private func verifyMessageInput(_ input: String) {
+    private func verifyMessageWithText() {
         isVerifying = true
         Task {
-            let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-
-            if trimmed.hasPrefix("http") {
+            if let messageId = deepLinkMessageId {
+                // Deep link — verify by ID
+                messageResult = await VerificationService.shared.verifyMessageById(messageId, receivedText: receivedText)
+            } else if scannedURL.hasPrefix("http") {
                 // URL — server-side verify
-                messageResult = await VerificationService.shared.verifyMessageByURL(trimmed)
-            } else if let data = trimmed.data(using: .utf8),
+                messageResult = await VerificationService.shared.verifyMessageByURL(url: scannedURL, receivedText: receivedText)
+            } else if let data = scannedURL.data(using: .utf8),
                       let artifact = try? JSONDecoder().decode(VerifiedMessageArtifact.self, from: data) {
                 // JSON artifact — local P-256 verify
-                messageResult = await VerificationService.shared.verifyMessage(artifact: artifact)
+                messageResult = await VerificationService.shared.verifyMessage(artifact: artifact, receivedText: receivedText)
             } else {
-                messageResult = .invalid(reason: "Could not parse input. Paste a verification URL or message artifact JSON.")
+                messageResult = .invalid(reason: "Could not parse verification data")
             }
 
             mode = .result

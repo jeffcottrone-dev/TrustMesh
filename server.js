@@ -403,9 +403,25 @@ app.get("/messages/:messageId", (req, res) => {
 
 // Server-side P-256 verification of a signed message
 app.post("/messages/:messageId/verify", (req, res) => {
+  const { receivedText } = req.body;
   const msg = lookupMessage.get(req.params.messageId);
   if (!msg) return res.status(404).json({ error: "message not found" });
 
+  // Step 1: Compare received text hash to signed messageHash
+  if (!receivedText) {
+    return res.status(400).json({ error: "receivedText is required — paste the message you received" });
+  }
+
+  const receivedHash = crypto.createHash("sha256").update(receivedText).digest("hex");
+  if (receivedHash !== msg.messageHash) {
+    return res.json({
+      valid: false,
+      textMatch: false,
+      reason: "Message text does not match what was signed — it was tampered with",
+    });
+  }
+
+  // Step 2: Verify P-256 signature on the commitment
   const device = lookupKey.get(msg.deviceID);
   if (!device) return res.status(404).json({ error: "device key not found" });
 
@@ -424,11 +440,11 @@ app.post("/messages/:messageId/verify", (req, res) => {
       Buffer.from(msg.signature, "base64")
     );
 
-    // Look up sender display name
     const sender = lookupSender.get(msg.deviceID);
 
     res.json({
       valid: isValid,
+      textMatch: true,
       messageId: msg.messageId,
       channel: msg.channel,
       sender: sender ? sender.displayName : null,
@@ -437,7 +453,7 @@ app.post("/messages/:messageId/verify", (req, res) => {
       createdAt: msg.createdAt,
     });
   } catch (err) {
-    res.json({ valid: false, error: err.message });
+    res.json({ valid: false, textMatch: true, error: err.message });
   }
 });
 
@@ -455,8 +471,9 @@ app.get("/v/:messageId", (req, res) => {
     `);
   }
 
+  // Verify signature
   const device = lookupKey.get(msg.deviceID);
-  let isValid = false;
+  let sigValid = false;
   try {
     if (device) {
       const keyObject = crypto.createPublicKey({
@@ -465,17 +482,15 @@ app.get("/v/:messageId", (req, res) => {
         type: "spki",
       });
       const commitmentBytes = Buffer.from(msg.commitment);
-      isValid = crypto.verify("sha256", commitmentBytes, keyObject, Buffer.from(msg.signature, "base64"));
+      sigValid = crypto.verify("sha256", commitmentBytes, keyObject, Buffer.from(msg.signature, "base64"));
     }
-  } catch { /* invalid = false */ }
+  } catch { /* sigValid = false */ }
 
   const sender = lookupSender.get(msg.deviceID);
   const senderName = sender ? sender.displayName : `Device ${msg.deviceID.substring(0, 8)}...`;
   const channelLabel = msg.channel.charAt(0).toUpperCase() + msg.channel.slice(1);
   const timestamp = new Date(msg.createdAt).toLocaleString();
-  const statusColor = isValid ? "#34c759" : "#ff3b30";
-  const statusIcon = isValid ? "&#10003;" : "&#10007;";
-  const statusText = isValid ? "VERIFIED" : "INVALID";
+  const sigColor = sigValid ? "#34c759" : "#ff3b30";
 
   res.send(`<!DOCTYPE html>
 <html><head><title>TrustMesh Verification</title>
@@ -483,31 +498,65 @@ app.get("/v/:messageId", (req, res) => {
 <style>
   body{font-family:-apple-system,system-ui,sans-serif;background:#1c2949;color:#fff;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;padding:16px;box-sizing:border-box}
   .card{background:rgba(255,255,255,0.08);border-radius:16px;padding:32px;max-width:420px;width:100%;text-align:center}
-  .status{font-size:64px;color:${statusColor}}
-  .badge{display:inline-block;background:${statusColor};color:#fff;padding:6px 20px;border-radius:20px;font-weight:700;font-size:18px;letter-spacing:2px;margin:12px 0}
-  .details{text-align:left;margin-top:24px;background:rgba(255,255,255,0.06);border-radius:10px;padding:16px}
+  .sig-status{font-size:14px;color:${sigColor};margin-bottom:8px;font-weight:600}
+  .details{text-align:left;margin-top:16px;background:rgba(255,255,255,0.06);border-radius:10px;padding:16px}
   .row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.08)}
   .row:last-child{border-bottom:none}
   .label{color:#bec3cf;font-size:13px}
   .value{color:#fff;font-size:13px;font-family:monospace;max-width:60%;text-align:right;word-break:break-all}
-  .message{margin-top:16px;padding:16px;background:rgba(255,255,255,0.06);border-radius:10px;text-align:left;font-size:14px;line-height:1.5}
+  .verify-section{margin-top:24px;text-align:left}
+  .verify-section label{display:block;color:#bec3cf;font-size:13px;margin-bottom:8px}
+  .verify-section textarea{width:100%;min-height:80px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#fff;font-size:14px;padding:12px;box-sizing:border-box;resize:vertical;font-family:inherit}
+  .verify-section textarea:focus{outline:none;border-color:#4a80c2}
+  .verify-btn{display:block;width:100%;margin-top:12px;padding:14px;border:none;border-radius:10px;background:#4a80c2;color:#fff;font-size:16px;font-weight:600;cursor:pointer}
+  .verify-btn:hover{background:#3a6faa}
+  .result-box{margin-top:16px;padding:20px;border-radius:10px;text-align:center}
+  .result-box.match{background:rgba(52,199,89,0.15);border:1px solid #34c759}
+  .result-box.tampered{background:rgba(255,59,48,0.15);border:1px solid #ff3b30}
+  .result-icon{font-size:48px}
+  .result-text{font-size:18px;font-weight:700;margin-top:8px;letter-spacing:1px}
+  .result-sub{font-size:13px;color:#bec3cf;margin-top:4px}
   .deeplink{margin-top:20px}
   .deeplink a{color:#4a80c2;text-decoration:none;font-size:14px}
   .logo{font-size:13px;color:#bec3cf;margin-top:24px}
 </style></head>
 <body><div class="card">
-  <div class="status">${statusIcon}</div>
-  <div class="badge">${statusText}</div>
+  <h2 style="margin:0 0 4px">Verify Message</h2>
+  <div class="sig-status">Signature: ${sigValid ? "Valid" : "INVALID"}</div>
   <div class="details">
     <div class="row"><span class="label">Sender</span><span class="value">${senderName}</span></div>
     <div class="row"><span class="label">Channel</span><span class="value">${channelLabel}</span></div>
     <div class="row"><span class="label">Time</span><span class="value">${timestamp}</span></div>
     <div class="row"><span class="label">Device</span><span class="value">${msg.deviceID.substring(0, 12)}...</span></div>
   </div>
-  ${msg.messageText ? `<div class="message">${msg.messageText.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>` : ""}
+  <div class="verify-section">
+    <label>Paste the message you received:</label>
+    <textarea id="receivedText" placeholder="Paste the exact text from the email or message you received..."></textarea>
+    <button class="verify-btn" onclick="verifyText()">Verify Message</button>
+    <div id="result"></div>
+  </div>
   <div class="deeplink"><a href="trustmesh://verify/${msg.messageId}">Open in TrustMesh App</a></div>
   <div class="logo">TrustMesh &mdash; Hardware-Attested Verification</div>
-</div></body></html>`);
+</div>
+<script>
+  const storedHash = "${msg.messageHash}";
+  async function verifyText() {
+    const text = document.getElementById("receivedText").value;
+    if (!text.trim()) return;
+    const encoder = new TextEncoder();
+    const data = encoder.encode(text);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+    const el = document.getElementById("result");
+    if (hashHex === storedHash) {
+      el.innerHTML = '<div class="result-box match"><div class="result-icon">&#10003;</div><div class="result-text" style="color:#34c759">VERIFIED</div><div class="result-sub">Message is authentic — exactly what the sender signed</div></div>';
+    } else {
+      el.innerHTML = '<div class="result-box tampered"><div class="result-icon">&#10007;</div><div class="result-text" style="color:#ff3b30">TAMPERED</div><div class="result-sub">Message does not match what was signed — it has been modified</div></div>';
+    }
+  }
+</script>
+</body></html>`);
 });
 
 // Health check
