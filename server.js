@@ -767,7 +767,7 @@ app.post("/orgs", (req, res) => {
         format: "der",
         type: "spki",
       });
-      const dataToSign = JSON.stringify({ name, domain: domain || null, deviceID, timestamp });
+      const dataToSign = `createOrg:${name}:${domain || ""}:${deviceID}:${timestamp}`;
       const isValid = crypto.verify("sha256", Buffer.from(dataToSign), keyObject, Buffer.from(signature, "base64"));
       if (!isValid) return res.status(403).json({ error: "invalid signature" });
     } catch (err) {
@@ -840,7 +840,7 @@ app.post("/orgs/:orgID/members", (req, res) => {
           format: "der",
           type: "spki",
         });
-        const dataToSign = JSON.stringify({ orgID, memberDeviceID, deviceID, timestamp });
+        const dataToSign = `addMember:${orgID}:${memberDeviceID}:${deviceID}:${timestamp}`;
         const isValid = crypto.verify("sha256", Buffer.from(dataToSign), keyObject, Buffer.from(signature, "base64"));
         if (!isValid) return res.status(403).json({ error: "invalid signature" });
       } catch (err) {

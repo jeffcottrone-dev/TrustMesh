@@ -19,14 +19,10 @@ final class OrganizationService {
         let deviceID = keyManager.deviceID()
         let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
 
-        // Build the data to sign
-        let signPayload: [String: Any] = [
-            "name": name,
-            "domain": domain as Any,
-            "deviceID": deviceID,
-            "timestamp": timestamp,
-        ]
-        let signData = try JSONSerialization.data(withJSONObject: signPayload, options: .sortedKeys)
+        // Sign a canonical string: "createOrg:name:domain:deviceID:timestamp"
+        let domainStr = (domain != nil && !domain!.isEmpty) ? domain! : ""
+        let signString = "createOrg:\(name):\(domainStr):\(deviceID):\(timestamp)"
+        let signData = Data(signString.utf8)
         let signatureData = try await keyManager.sign(data: signData)
 
         let url = URL(string: "\(backendURL)/orgs")!
@@ -98,13 +94,9 @@ final class OrganizationService {
         let deviceID = keyManager.deviceID()
         let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
 
-        let signPayload: [String: Any] = [
-            "orgID": orgID,
-            "memberDeviceID": memberDeviceID,
-            "deviceID": deviceID,
-            "timestamp": timestamp,
-        ]
-        let signData = try JSONSerialization.data(withJSONObject: signPayload, options: .sortedKeys)
+        // Sign a canonical string: "addMember:orgID:memberDeviceID:deviceID:timestamp"
+        let signString = "addMember:\(orgID):\(memberDeviceID):\(deviceID):\(timestamp)"
+        let signData = Data(signString.utf8)
         let signatureData = try await keyManager.sign(data: signData)
 
         let url = URL(string: "\(backendURL)/orgs/\(orgID)/members")!
