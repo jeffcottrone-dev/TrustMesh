@@ -584,7 +584,7 @@ app.post("/messages/:messageId/verify", (req, res) => {
 
     res.json({
       valid: isValid,
-      textMatch: textMatch !== null ? textMatch : undefined,
+      textMatch: textMatch !== null ? textMatch : true,
       messageId: msg.messageId,
       channel: msg.channel,
       sender: sender ? sender.displayName : null,

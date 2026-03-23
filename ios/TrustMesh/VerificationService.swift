@@ -229,7 +229,8 @@ final class VerificationService {
 
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             let isValid = json?["valid"] as? Bool ?? false
-            let textMatch = json?["textMatch"] as? Bool ?? false
+            // textMatch is only false when server explicitly says text was tampered
+            let textMatch = json?["textMatch"] as? Bool ?? true
 
             if !textMatch {
                 let reason = json?["reason"] as? String ?? "Message text does not match what was signed"
