@@ -169,14 +169,10 @@ struct AuthorizeView: View {
     @State private var currentActionText = ""
     @State private var showReceipt = false
 
-    @State private var showOrganizations = false
-
     // Message mode state
     @State private var messageText = ""
     @State private var selectedChannel: MessageChannel = .sms
     @State private var includeMessageText = true
-    @State private var selectedOrgID: String? = nil
-    @State private var orgs: [Organization] = []
     @State private var currentArtifact: VerifiedMessageArtifact?
     @State private var currentMessageText = ""
     @State private var currentChannel: MessageChannel = .sms
@@ -217,19 +213,6 @@ struct AuthorizeView: View {
             }
             .navigationTitle("Authorize")
             .navyTheme()
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showOrganizations = true
-                    } label: {
-                        Image(systemName: "building.2")
-                            .foregroundColor(.tmBlue)
-                    }
-                }
-            }
-            .sheet(isPresented: $showOrganizations) {
-                OrganizationView()
-            }
             .contentShape(Rectangle())
             .onTapGesture { dismissKeyboard() }
             .sheet(isPresented: $showReceipt) {
@@ -241,9 +224,6 @@ struct AuthorizeView: View {
                 if let artifact = currentArtifact {
                     MessageArtifactView(artifact: artifact, messageText: currentMessageText, channel: currentChannel)
                 }
-            }
-            .task {
-                orgs = await OrganizationService.shared.myOrgs()
             }
         }
     }
@@ -287,28 +267,6 @@ struct AuthorizeView: View {
 
     private var messageModeView: some View {
         VStack(spacing: 20) {
-            // Organization picker
-            if !orgs.isEmpty {
-                HStack {
-                    Image(systemName: "building.2")
-                        .foregroundColor(.tmSilver)
-                    Picker("Organization", selection: $selectedOrgID) {
-                        Text("Personal").tag(nil as String?)
-                        ForEach(orgs) { org in
-                            HStack {
-                                if org.verified {
-                                    Image(systemName: "checkmark.shield.fill")
-                                }
-                                Text(org.name)
-                            }
-                            .tag(org.orgID as String?)
-                        }
-                    }
-                    .tint(.tmBlue)
-                }
-                .padding(.horizontal)
-            }
-
             // Channel picker
             HStack(spacing: 12) {
                 ForEach(MessageChannel.allCases, id: \.self) { ch in
@@ -401,8 +359,7 @@ struct AuthorizeView: View {
                 let artifact = try await MessageGenerator.shared.generateSignedMessage(
                     messageText: messageText,
                     channel: selectedChannel,
-                    includeText: includeMessageText,
-                    orgID: selectedOrgID
+                    includeText: includeMessageText
                 )
                 currentArtifact = artifact
                 currentMessageText = messageText
