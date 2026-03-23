@@ -17,7 +17,7 @@ final class MessageGenerator {
 
     // MARK: - Generate signed message
 
-    func generateSignedMessage(messageText: String, channel: MessageChannel, includeText: Bool = true, context: String? = nil) async throws -> VerifiedMessageArtifact {
+    func generateSignedMessage(messageText: String, channel: MessageChannel, includeText: Bool = true, context: String? = nil, orgID: String? = nil) async throws -> VerifiedMessageArtifact {
         let keyManager = KeyManager.shared
 
         // Auto-register sender on first message sign
@@ -50,7 +50,8 @@ final class MessageGenerator {
             messageHash: messageHash,
             timestamp: timestamp,
             nonce: nonce,
-            context: context
+            context: context,
+            orgID: orgID
         )
 
         // 6. JSON encode with sorted keys (must match server verification)
@@ -89,7 +90,7 @@ final class MessageGenerator {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "messageId": artifact.messageId,
             "deviceID": artifact.commitment.senderID,
             "channel": artifact.commitment.channel,
@@ -99,6 +100,9 @@ final class MessageGenerator {
             "signature": artifact.signature,
             "publicKeyHint": artifact.publicKeyHint,
         ]
+        if let orgID = artifact.commitment.orgID {
+            body["orgID"] = orgID
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await URLSession.shared.data(for: request)

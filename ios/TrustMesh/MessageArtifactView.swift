@@ -13,6 +13,7 @@ struct MessageArtifactView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
     @State private var qrImage: UIImage?
+    @State private var orgName: String?
 
     var body: some View {
         ScrollView {
@@ -27,6 +28,26 @@ struct MessageArtifactView: View {
                         .padding()
                         .background(Color.white)
                         .cornerRadius(12)
+                }
+
+                // Organization badge (if signed under org)
+                if let orgID = artifact.commitment.orgID, !orgID.isEmpty {
+                    HStack(spacing: 8) {
+                        Image(systemName: "building.2.crop.circle.fill")
+                            .foregroundColor(.tmBlue)
+                        Text(orgName ?? "Organization")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                        Spacer()
+                        Image(systemName: "checkmark.shield.fill")
+                            .foregroundColor(.green)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Color.tmBlue.opacity(0.15))
+                    .cornerRadius(10)
+                    .padding(.horizontal)
                 }
 
                 // Channel badge + message preview
@@ -141,6 +162,12 @@ struct MessageArtifactView: View {
         .background(Color.tmNavy.ignoresSafeArea())
         .onAppear {
             qrImage = generateQRCode()
+        }
+        .task {
+            if let orgID = artifact.commitment.orgID {
+                let org = await OrganizationService.shared.getOrg(orgID)
+                orgName = org?.name
+            }
         }
     }
 

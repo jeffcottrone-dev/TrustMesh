@@ -13,6 +13,7 @@ struct MessageCommitment: Codable {
     let timestamp: Int64       // Unix ms
     let nonce: String          // random UUID
     let context: String?       // optional
+    let orgID: String?         // organization ID if signed under org
 }
 
 struct VerifiedMessageArtifact: Codable, Identifiable {

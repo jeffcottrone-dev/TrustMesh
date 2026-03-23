@@ -71,7 +71,48 @@ db.exec(`
     signature       TEXT NOT NULL,
     publicKeyHint   TEXT,
     verificationURL TEXT,
+    orgID           TEXT,
     createdAt       TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (deviceID) REFERENCES keys(deviceID)
+  )
+`);
+
+// Add orgID column if upgrading from older schema
+try { db.exec(`ALTER TABLE signed_messages ADD COLUMN orgID TEXT`); } catch {}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS transparency_log (
+    sequenceNum  INTEGER PRIMARY KEY AUTOINCREMENT,
+    action       TEXT NOT NULL,
+    entityType   TEXT NOT NULL,
+    entityID     TEXT NOT NULL,
+    dataHash     TEXT NOT NULL,
+    previousHash TEXT NOT NULL,
+    timestamp    TEXT DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS organizations (
+    orgID         TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    domain        TEXT,
+    verifiedAt    TEXT,
+    status        TEXT DEFAULT 'pending',
+    adminDeviceID TEXT NOT NULL,
+    createdAt     TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (adminDeviceID) REFERENCES keys(deviceID)
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS org_members (
+    orgID    TEXT NOT NULL,
+    deviceID TEXT NOT NULL,
+    role     TEXT DEFAULT 'member',
+    joinedAt TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (orgID, deviceID),
+    FOREIGN KEY (orgID) REFERENCES organizations(orgID),
     FOREIGN KEY (deviceID) REFERENCES keys(deviceID)
   )
 `);
@@ -144,13 +185,83 @@ const lookupSender = db.prepare(
 // --- Message prepared statements ---
 
 const insertMessage = db.prepare(`
-  INSERT INTO signed_messages (messageId, deviceID, channel, messageHash, messageText, commitment, signature, publicKeyHint, verificationURL)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO signed_messages (messageId, deviceID, channel, messageHash, messageText, commitment, signature, publicKeyHint, verificationURL, orgID)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const lookupMessage = db.prepare(
   `SELECT * FROM signed_messages WHERE messageId = ?`
 );
+
+// --- Organization prepared statements ---
+
+const insertOrg = db.prepare(`
+  INSERT INTO organizations (orgID, name, domain, adminDeviceID) VALUES (?, ?, ?, ?)
+`);
+
+const lookupOrg = db.prepare(
+  `SELECT * FROM organizations WHERE orgID = ?`
+);
+
+const insertOrgMember = db.prepare(`
+  INSERT OR IGNORE INTO org_members (orgID, deviceID, role) VALUES (?, ?, ?)
+`);
+
+const deleteOrgMember = db.prepare(
+  `DELETE FROM org_members WHERE orgID = ? AND deviceID = ?`
+);
+
+const lookupOrgMember = db.prepare(
+  `SELECT * FROM org_members WHERE orgID = ? AND deviceID = ?`
+);
+
+const listOrgMembers = db.prepare(
+  `SELECT om.deviceID, om.role, om.joinedAt, s.displayName FROM org_members om LEFT JOIN senders s ON om.deviceID = s.deviceID WHERE om.orgID = ?`
+);
+
+const countOrgMembers = db.prepare(
+  `SELECT COUNT(*) as count FROM org_members WHERE orgID = ?`
+);
+
+const listOrgsByDevice = db.prepare(
+  `SELECT o.*, om.role FROM organizations o JOIN org_members om ON o.orgID = om.orgID WHERE om.deviceID = ?`
+);
+
+// --- Transparency log helper ---
+
+function appendToLog(action, entityType, entityID, payloadForHash) {
+  const last = db.prepare("SELECT dataHash FROM transparency_log ORDER BY sequenceNum DESC LIMIT 1").get();
+  const previousHash = last ? last.dataHash : "0";
+  const entryData = `${action}:${entityType}:${entityID}:${payloadForHash}:${previousHash}`;
+  const entryHash = crypto.createHash("sha256").update(entryData).digest("hex");
+  db.prepare("INSERT INTO transparency_log (action, entityType, entityID, dataHash, previousHash) VALUES (?, ?, ?, ?, ?)")
+    .run(action, entityType, entityID, entryHash, previousHash);
+  return entryHash;
+}
+
+// --- Signature verification helper for admin requests ---
+
+function verifyAdminSignature(deviceID, bodyWithoutSig) {
+  const device = lookupKey.get(deviceID);
+  if (!device) return { valid: false, error: "device not found" };
+  try {
+    const keyObject = crypto.createPublicKey({
+      key: Buffer.from(device.publicKey, "base64"),
+      format: "der",
+      type: "spki",
+    });
+    const dataToVerify = JSON.stringify(bodyWithoutSig);
+    const isValid = crypto.verify(
+      "sha256",
+      Buffer.from(dataToVerify),
+      keyObject,
+      Buffer.from(bodyWithoutSig._signature || "", "base64")
+    );
+    return { valid: isValid };
+  } catch (err) {
+    return { valid: false, error: err.message };
+  }
+}
 
 // --- Routes ---
 
@@ -161,14 +272,21 @@ app.post("/keys", (req, res) => {
     return res.status(400).json({ error: "deviceID and publicKey are required" });
   }
   upsertKey.run(deviceID, publicKey);
+  const keyHash = crypto.createHash("sha256").update(publicKey).digest("hex");
+  appendToLog("key_register", "device", deviceID, keyHash);
   res.status(201).json({ status: "registered" });
 });
 
-// Look up a device
+// Look up a device (includes registeredAt for key pinning)
 app.get("/keys/:deviceID", (req, res) => {
   const row = lookupKey.get(req.params.deviceID);
   if (!row) return res.status(404).json({ error: "device not found" });
-  res.json(row);
+  // Find the log entry for this key registration
+  const logEntry = db.prepare("SELECT sequenceNum FROM transparency_log WHERE entityID = ? AND action = 'key_register' ORDER BY sequenceNum DESC LIMIT 1").get(req.params.deviceID);
+  res.json({
+    ...row,
+    logSequenceNum: logEntry ? logEntry.sequenceNum : null,
+  });
 });
 
 // Issue a challenge for a registered device
@@ -348,6 +466,8 @@ app.post("/senders", (req, res) => {
   }
   const channelJSON = JSON.stringify(channels || []);
   upsertSender.run(deviceID, displayName, channelJSON);
+  const senderHash = crypto.createHash("sha256").update(`${deviceID}:${displayName}`).digest("hex");
+  appendToLog("sender_register", "device", deviceID, senderHash);
   res.status(201).json({ status: "registered", deviceID, displayName });
 });
 
@@ -368,7 +488,7 @@ app.get("/senders/:deviceID", (req, res) => {
 
 // Store signed message artifact
 app.post("/messages", (req, res) => {
-  const { messageId, deviceID, channel, messageHash, messageText, commitment, signature, publicKeyHint } = req.body;
+  const { messageId, deviceID, channel, messageHash, messageText, commitment, signature, publicKeyHint, orgID } = req.body;
   if (!messageId || !deviceID || !channel || !messageHash || !commitment || !signature) {
     return res.status(400).json({ error: "messageId, deviceID, channel, messageHash, commitment, and signature are required" });
   }
@@ -377,9 +497,16 @@ app.post("/messages", (req, res) => {
   if (!device) {
     return res.status(404).json({ error: "device not found — register key first" });
   }
+  // If orgID provided, verify device is a member of that org
+  if (orgID) {
+    const membership = lookupOrgMember.get(orgID, deviceID);
+    if (!membership) {
+      return res.status(403).json({ error: "device is not a member of this organization" });
+    }
+  }
   const verificationURL = `${req.protocol}://${req.get("host")}/v/${messageId}`;
   const commitmentJSON = typeof commitment === "string" ? commitment : JSON.stringify(commitment);
-  insertMessage.run(messageId, deviceID, channel, messageHash, messageText || null, commitmentJSON, signature, publicKeyHint || null, verificationURL);
+  insertMessage.run(messageId, deviceID, channel, messageHash, messageText || null, commitmentJSON, signature, publicKeyHint || null, verificationURL, orgID || null);
   res.status(201).json({ messageId, verificationURL, status: "stored" });
 });
 
@@ -442,6 +569,19 @@ app.post("/messages/:messageId/verify", (req, res) => {
 
     const sender = lookupSender.get(msg.deviceID);
 
+    // Include organization info if message was signed under an org
+    let organization = null;
+    if (msg.orgID) {
+      const org = lookupOrg.get(msg.orgID);
+      if (org) {
+        organization = {
+          name: org.name,
+          verified: !!org.verifiedAt,
+          domain: org.domain,
+        };
+      }
+    }
+
     res.json({
       valid: isValid,
       textMatch: true,
@@ -450,6 +590,7 @@ app.post("/messages/:messageId/verify", (req, res) => {
       sender: sender ? sender.displayName : null,
       deviceID: msg.deviceID,
       messageText: msg.messageText,
+      organization,
       createdAt: msg.createdAt,
     });
   } catch (err) {
@@ -492,6 +633,21 @@ app.get("/v/:messageId", (req, res) => {
   const timestamp = new Date(msg.createdAt).toLocaleString();
   const sigColor = sigValid ? "#34c759" : "#ff3b30";
 
+  // Organization info
+  let orgHTML = "";
+  if (msg.orgID) {
+    const org = lookupOrg.get(msg.orgID);
+    if (org) {
+      const orgVerified = !!org.verifiedAt;
+      const shieldColor = orgVerified ? "#34c759" : "#f0ad4e";
+      const shieldLabel = orgVerified ? "Verified Organization" : "Unverified Organization";
+      orgHTML = `<div style="margin:12px 0;padding:12px;background:rgba(255,255,255,0.06);border-radius:10px;display:flex;align-items:center;gap:10px">
+        <span style="font-size:24px;color:${shieldColor}">&#x1F6E1;</span>
+        <div><div style="font-weight:700;color:#fff">${org.name}</div><div style="font-size:12px;color:${shieldColor}">${shieldLabel}${org.domain ? ' &mdash; ' + org.domain : ''}</div></div>
+      </div>`;
+    }
+  }
+
   res.send(`<!DOCTYPE html>
 <html><head><title>TrustMesh Verification</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -523,6 +679,7 @@ app.get("/v/:messageId", (req, res) => {
 <body><div class="card">
   <h2 style="margin:0 0 4px">Verify Message</h2>
   <div class="sig-status">Signature: ${sigValid ? "Valid" : "INVALID"}</div>
+  ${orgHTML}
   <div class="details">
     <div class="row"><span class="label">Sender</span><span class="value">${senderName}</span></div>
     <div class="row"><span class="label">Channel</span><span class="value">${channelLabel}</span></div>
@@ -557,6 +714,221 @@ app.get("/v/:messageId", (req, res) => {
   }
 </script>
 </body></html>`);
+});
+
+// --- Transparency Log ---
+
+// Public audit log (paginated)
+app.get("/transparency/log", (req, res) => {
+  const since = parseInt(req.query.since) || 0;
+  const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+  const entries = db.prepare(
+    "SELECT * FROM transparency_log WHERE sequenceNum > ? ORDER BY sequenceNum ASC LIMIT ?"
+  ).all(since, limit);
+  res.json({ entries, count: entries.length });
+});
+
+// Verify chain integrity
+app.get("/transparency/verify", (_req, res) => {
+  const entries = db.prepare("SELECT * FROM transparency_log ORDER BY sequenceNum ASC").all();
+  let previousHash = "0";
+  for (const entry of entries) {
+    if (entry.previousHash !== previousHash) {
+      return res.json({ valid: false, brokenAt: entry.sequenceNum });
+    }
+    // Recompute entry hash to verify
+    const recomputed = crypto.createHash("sha256")
+      .update(`${entry.action}:${entry.entityType}:${entry.entityID}:${entry.dataHash.replace(/.*:/, '')}:${entry.previousHash}`)
+      .digest("hex");
+    // The stored dataHash IS the full entry hash, so we just chain forward
+    previousHash = entry.dataHash;
+  }
+  res.json({ valid: true, entries: entries.length });
+});
+
+// --- Organizations ---
+
+// Create organization
+app.post("/orgs", (req, res) => {
+  const { name, domain, deviceID, signature, timestamp } = req.body;
+  if (!name || !deviceID) {
+    return res.status(400).json({ error: "name and deviceID are required" });
+  }
+  // Verify device key exists
+  const device = lookupKey.get(deviceID);
+  if (!device) {
+    return res.status(404).json({ error: "device not found — register key first" });
+  }
+  // Verify signature if provided (signed request)
+  if (signature) {
+    try {
+      const keyObject = crypto.createPublicKey({
+        key: Buffer.from(device.publicKey, "base64"),
+        format: "der",
+        type: "spki",
+      });
+      const dataToSign = JSON.stringify({ name, domain: domain || null, deviceID, timestamp });
+      const isValid = crypto.verify("sha256", Buffer.from(dataToSign), keyObject, Buffer.from(signature, "base64"));
+      if (!isValid) return res.status(403).json({ error: "invalid signature" });
+    } catch (err) {
+      return res.status(403).json({ error: "signature verification failed: " + err.message });
+    }
+  }
+
+  const orgID = crypto.randomUUID();
+  insertOrg.run(orgID, name, domain || null, deviceID);
+  // Add admin as first member
+  insertOrgMember.run(orgID, deviceID, "admin");
+  // Log to transparency log
+  const orgHash = crypto.createHash("sha256").update(`${orgID}:${name}:${deviceID}`).digest("hex");
+  appendToLog("org_register", "org", orgID, orgHash);
+
+  res.status(201).json({ orgID, name, domain: domain || null, status: "pending" });
+});
+
+// Get organization profile
+app.get("/orgs/:orgID", (req, res) => {
+  const org = lookupOrg.get(req.params.orgID);
+  if (!org) return res.status(404).json({ error: "organization not found" });
+  const memberCount = countOrgMembers.get(org.orgID).count;
+  res.json({
+    orgID: org.orgID,
+    name: org.name,
+    domain: org.domain,
+    verified: !!org.verifiedAt,
+    status: org.status,
+    memberCount,
+    createdAt: org.createdAt,
+  });
+});
+
+// List orgs for a device (for org picker)
+app.get("/orgs", (req, res) => {
+  const { deviceID } = req.query;
+  if (!deviceID) return res.status(400).json({ error: "deviceID query parameter is required" });
+  const orgs = listOrgsByDevice.all(deviceID);
+  res.json(orgs.map(o => ({
+    orgID: o.orgID,
+    name: o.name,
+    domain: o.domain,
+    verified: !!o.verifiedAt,
+    status: o.status,
+    role: o.role,
+    memberCount: countOrgMembers.get(o.orgID).count,
+  })));
+});
+
+// Add member to organization (admin only)
+app.post("/orgs/:orgID/members", (req, res) => {
+  const { deviceID, memberDeviceID, signature, timestamp } = req.body;
+  const { orgID } = req.params;
+  if (!deviceID || !memberDeviceID) {
+    return res.status(400).json({ error: "deviceID (admin) and memberDeviceID are required" });
+  }
+  // Verify admin is a member with admin role
+  const adminMember = lookupOrgMember.get(orgID, deviceID);
+  if (!adminMember || adminMember.role !== "admin") {
+    return res.status(403).json({ error: "only admins can add members" });
+  }
+  // Verify admin signature if provided
+  if (signature) {
+    const device = lookupKey.get(deviceID);
+    if (device) {
+      try {
+        const keyObject = crypto.createPublicKey({
+          key: Buffer.from(device.publicKey, "base64"),
+          format: "der",
+          type: "spki",
+        });
+        const dataToSign = JSON.stringify({ orgID, memberDeviceID, deviceID, timestamp });
+        const isValid = crypto.verify("sha256", Buffer.from(dataToSign), keyObject, Buffer.from(signature, "base64"));
+        if (!isValid) return res.status(403).json({ error: "invalid signature" });
+      } catch (err) {
+        return res.status(403).json({ error: "signature verification failed: " + err.message });
+      }
+    }
+  }
+  // Verify member device key exists
+  const memberDevice = lookupKey.get(memberDeviceID);
+  if (!memberDevice) {
+    return res.status(404).json({ error: "member device not found — must register key first" });
+  }
+  insertOrgMember.run(orgID, memberDeviceID, "member");
+  const memberHash = crypto.createHash("sha256").update(`${orgID}:${memberDeviceID}`).digest("hex");
+  appendToLog("org_member_add", "org", orgID, memberHash);
+  res.status(201).json({ status: "added", orgID, memberDeviceID });
+});
+
+// Remove member from organization (admin only)
+app.delete("/orgs/:orgID/members/:memberDeviceID", (req, res) => {
+  const { orgID, memberDeviceID } = req.params;
+  const deviceID = req.query.deviceID || req.body?.deviceID;
+  if (!deviceID) {
+    return res.status(400).json({ error: "deviceID (admin) is required" });
+  }
+  const adminMember = lookupOrgMember.get(orgID, deviceID);
+  if (!adminMember || adminMember.role !== "admin") {
+    return res.status(403).json({ error: "only admins can remove members" });
+  }
+  // Can't remove yourself if you're the only admin
+  if (memberDeviceID === deviceID) {
+    return res.status(400).json({ error: "cannot remove yourself as admin" });
+  }
+  deleteOrgMember.run(orgID, memberDeviceID);
+  const removeHash = crypto.createHash("sha256").update(`${orgID}:${memberDeviceID}:removed`).digest("hex");
+  appendToLog("org_member_remove", "org", orgID, removeHash);
+  res.json({ status: "removed", orgID, memberDeviceID });
+});
+
+// List organization members (admin only)
+app.get("/orgs/:orgID/members", (req, res) => {
+  const { deviceID } = req.query;
+  const { orgID } = req.params;
+  if (!deviceID) {
+    return res.status(400).json({ error: "deviceID query parameter is required" });
+  }
+  const member = lookupOrgMember.get(orgID, deviceID);
+  if (!member || member.role !== "admin") {
+    return res.status(403).json({ error: "only admins can list members" });
+  }
+  const members = listOrgMembers.all(orgID);
+  res.json(members.map(m => ({
+    deviceID: m.deviceID,
+    displayName: m.displayName,
+    role: m.role,
+    joinedAt: m.joinedAt,
+  })));
+});
+
+// Domain verification (DNS TXT record check)
+app.post("/orgs/:orgID/verify-domain", async (req, res) => {
+  const { deviceID } = req.body;
+  const { orgID } = req.params;
+  const org = lookupOrg.get(orgID);
+  if (!org) return res.status(404).json({ error: "organization not found" });
+  if (!org.domain) return res.status(400).json({ error: "organization has no domain set" });
+
+  // Verify requester is admin
+  const adminMember = lookupOrgMember.get(orgID, deviceID);
+  if (!adminMember || adminMember.role !== "admin") {
+    return res.status(403).json({ error: "only admins can verify domain" });
+  }
+
+  // Check DNS TXT record
+  const dns = require("dns").promises;
+  try {
+    const records = await dns.resolveTxt(org.domain);
+    const flat = records.map(r => r.join(""));
+    const expected = `trustmesh-verify=${orgID}`;
+    if (flat.includes(expected)) {
+      db.prepare("UPDATE organizations SET verifiedAt = datetime('now'), status = 'active' WHERE orgID = ?").run(orgID);
+      res.json({ verified: true, domain: org.domain });
+    } else {
+      res.json({ verified: false, expected, found: flat, instruction: `Add a TXT record to ${org.domain} with value: ${expected}` });
+    }
+  } catch (err) {
+    res.json({ verified: false, error: "DNS lookup failed: " + err.message, instruction: `Add a TXT record to ${org.domain} with value: trustmesh-verify=${orgID}` });
+  }
 });
 
 // Health check

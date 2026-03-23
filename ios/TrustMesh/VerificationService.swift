@@ -14,7 +14,8 @@ enum VerificationResult {
 }
 
 enum MessageVerificationResult {
-    case valid(sender: String, channel: String, timestamp: Date, message: String?)
+    case valid(sender: String, channel: String, timestamp: Date, message: String?,
+               organization: VerifiedOrg?)
     case invalid(reason: String)
 }
 
@@ -57,6 +58,12 @@ final class VerificationService {
                 return .invalid(reason: "No public key in server response")
             }
             serverPublicKeyBase64 = pubKey
+
+            // Key pinning check
+            let pinResult = KeyPinStore.shared.verify(deviceID: deviceID, publicKey: pubKey)
+            if case .mismatch = pinResult {
+                return .invalid(reason: "WARNING: Server public key has changed since first seen. Possible key swap attack.")
+            }
         } catch {
             return .invalid(reason: "Could not reach server: \(error.localizedDescription)")
         }
@@ -133,6 +140,12 @@ final class VerificationService {
                 return .invalid(reason: "No public key in server response")
             }
             serverPublicKeyBase64 = pubKey
+
+            // Key pinning check
+            let pinResult = KeyPinStore.shared.verify(deviceID: deviceID, publicKey: pubKey)
+            if case .mismatch = pinResult {
+                return .invalid(reason: "WARNING: Server public key has changed since first seen. Possible key swap attack.")
+            }
         } catch {
             return .invalid(reason: "Could not reach server: \(error.localizedDescription)")
         }
@@ -162,11 +175,13 @@ final class VerificationService {
             if isValid {
                 let timestamp = Date(timeIntervalSince1970: Double(artifact.commitment.timestamp) / 1000.0)
                 let senderName = await fetchSenderName(deviceID: deviceID) ?? "Device \(String(deviceID.prefix(8)))..."
+                // Local verify doesn't have org info — would need separate fetch
                 return .valid(
                     sender: senderName,
                     channel: artifact.commitment.channel,
                     timestamp: timestamp,
-                    message: artifact.message
+                    message: artifact.message,
+                    organization: nil
                 )
             } else {
                 return .invalid(reason: "Signature does not match — message was tampered with")
@@ -232,7 +247,17 @@ final class VerificationService {
                     timestamp = Date()
                 }
 
-                return .valid(sender: sender, channel: channel, timestamp: timestamp, message: messageText)
+                // Parse organization info if present
+                var org: VerifiedOrg?
+                if let orgData = json?["organization"] as? [String: Any] {
+                    org = VerifiedOrg(
+                        name: orgData["name"] as? String ?? "",
+                        verified: orgData["verified"] as? Bool ?? false,
+                        domain: orgData["domain"] as? String
+                    )
+                }
+
+                return .valid(sender: sender, channel: channel, timestamp: timestamp, message: messageText, organization: org)
             } else {
                 let error = json?["error"] as? String ?? "Signature verification failed"
                 return .invalid(reason: error)

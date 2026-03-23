@@ -25,6 +25,7 @@ struct VerifyView: View {
     // Deep link support
     var deepLink = DeepLinkManager.shared
     @State private var deepLinkMessageId: String?
+    @State private var showTransparencyLog = false
 
     enum VerifyMode {
         case choose, scan, paste, enterMessage, result
@@ -73,6 +74,19 @@ struct VerifyView: View {
             .navigationTitle("Verify")
             .navigationBarTitleDisplayMode(.inline)
             .navyTheme()
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showTransparencyLog = true
+                    } label: {
+                        Image(systemName: "list.bullet.rectangle")
+                            .foregroundColor(.tmBlue)
+                    }
+                }
+            }
+            .sheet(isPresented: $showTransparencyLog) {
+                TransparencyLogView()
+            }
             .onChange(of: deepLink.pendingVerifyMessageId) {
                 if let messageId = deepLink.pendingVerifyMessageId {
                     deepLink.pendingVerifyMessageId = nil
@@ -319,7 +333,7 @@ struct VerifyView: View {
             Spacer()
 
             switch messageResult {
-            case .valid(let sender, let channel, let timestamp, let message):
+            case .valid(let sender, let channel, let timestamp, let message, let organization):
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 80))
                     .foregroundColor(.green)
@@ -328,6 +342,27 @@ struct VerifyView: View {
                     .fontWeight(.black)
                     .foregroundColor(.green)
                 VStack(spacing: 12) {
+                    // Organization badge
+                    if let org = organization {
+                        HStack(spacing: 8) {
+                            Image(systemName: org.verified ? "checkmark.shield.fill" : "shield.fill")
+                                .foregroundColor(org.verified ? .green : .orange)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(org.name)
+                                    .font(.subheadline)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                Text(org.verified ? "Verified Organization" : "Unverified Organization")
+                                    .font(.caption2)
+                                    .foregroundColor(org.verified ? .green : .orange)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background((org.verified ? Color.green : Color.orange).opacity(0.15))
+                        .cornerRadius(10)
+                    }
+
                     HStack(spacing: 8) {
                         let ch = MessageChannel(rawValue: channel) ?? .other
                         Image(systemName: ch.icon)
